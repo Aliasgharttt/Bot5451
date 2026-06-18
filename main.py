@@ -149,16 +149,10 @@ def get_main_menu():
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
     user = message.from_user
-    # Name as clickable link (blue)
     user_link = f"[{user.full_name}](tg://user?id={user.id})"
     
     await message.answer(
-        f"سلام {user_link} 👋 خوش آمدید!\n\n"
-        "🔹 **V2Ray**: vless, vmess, trojan, hysteria2\n"
-        "🔹 **Proxy**: MTProto (لینک مستقیم)\n"
-        "🔹 **NPT**: فایل .npvt مخصوص NapsternetV\n\n"
-        "🎲 هر دکمه یک کانفیگ رندوم از کانال را ارسال می‌کند.\n"
-        "👇 انتخاب کنید:",
+        f"سلام {user_link} 👋 خوش آمدید!",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=get_main_menu()
     )
