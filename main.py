@@ -5,6 +5,7 @@ import random
 import re
 import json
 import requests
+import jdatetime
 from datetime import datetime
 from threading import Thread
 from typing import List, Dict
@@ -142,6 +143,12 @@ def delete_from_db(db_id: int = None, filter_type: str = None):
     except Exception as e:
         logger.error(f"❌ DB delete error: {e}")
 
+# ============ JALALI HELPER ============
+def to_jalali(dt: datetime) -> str:
+    """Convert datetime to Jalali string"""
+    jd = jdatetime.datetime.fromgregorian(datetime=dt)
+    return jd.strftime('%Y/%m/%d %H:%M')
+
 # ============ HEALTH CHECK ============
 async def health_check(request):
     return web.Response(text="OK")
@@ -241,7 +248,6 @@ async def cmd_start(message: Message):
         reply_markup=get_main_menu()
     )
 
-# ----- اصلاح‌شده: فقط خود کانفیگ ارسال بشه، بدون پیام اضافی -----
 @dp.message(F.text == "V2Ray")
 async def get_v2ray(message: Message):
     items = get_from_db("v2ray")
@@ -316,7 +322,7 @@ async def manage_show_list(callback: types.CallbackQuery, state: FSMContext):
             text += f"{i}️⃣ {item.get('file_name', 'Unknown')}\n"
         else:
             text += f"{i}️⃣ {item['text'][:70].replace(chr(10), ' ')}...\n"
-        text += f"   📅 {item['date'].strftime('%Y-%m-%d %H:%M')}\n\n"
+        text += f"   📅 {to_jalali(item['date'])}\n\n"
     text += "شماره رو بفرست یا بنویس **برگشت**"
     await callback.message.edit_text(text, parse_mode=ParseMode.MARKDOWN)
 
@@ -348,7 +354,7 @@ async def manage_delete(message: Message, state: FSMContext):
             text += f"{i}️⃣ {item.get('file_name', 'Unknown')}\n"
         else:
             text += f"{i}️⃣ {item['text'][:70].replace(chr(10), ' ')}...\n"
-        text += f"   📅 {item['date'].strftime('%Y-%m-%d %H:%M')}\n\n"
+        text += f"   📅 {to_jalali(item['date'])}\n\n"
     text += "شماره رو بفرست یا بنویس **برگشت**"
     await message.answer(text, parse_mode=ParseMode.MARKDOWN)
 
@@ -377,7 +383,7 @@ async def support_receive_message(message: Message, state: FSMContext):
         f"👤 {user.full_name}\n"
         f"🆔 @{user.username or 'ندارد'}\n"
         f"🔢 `{user.id}`\n"
-        f"🕐 {message.date.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        f"🕐 {to_jalali(message.date)}\n\n"
         f"📝 {message.text}"
     )
     try:
@@ -388,19 +394,16 @@ async def support_receive_message(message: Message, state: FSMContext):
     await state.clear()
 
 # ============ SEND FUNCTIONS ============
-
-# ----- اصلاح‌شده: ارسال V2Ray به صورت متن ساده (بدون Markdown) -----
 async def send_v2ray(message: Message, item: Dict):
     text = '\n'.join(line.strip() for line in item["text"].split('\n') if line.strip())
     await message.answer(
-        f"🟢 V2Ray\n📅 {item['date'].strftime('%Y-%m-%d %H:%M')}\n\n{text[:1000]}",
-        parse_mode=None,                      # متن ساده، Markdown خراب نمی‌شه
+        f"🟢 V2Ray\n📅 {to_jalali(item['date'])}\n\n{text[:1000]}",
+        parse_mode=None,
         disable_web_page_preview=True
     )
 
 async def send_proxy(message: Message, item: Dict):
     text = item["text"]
-    date_str = item["date"].strftime('%Y-%m-%d %H:%M')
     link = None
     for line in text.split('\n'):
         if 't.me/proxy' in line:
@@ -410,28 +413,27 @@ async def send_proxy(message: Message, item: Dict):
             break
     if link:
         await message.answer(
-            f"🔵 MTProto\n📅 {date_str}\n\n[⚡ کلیک کنید]({link})",
+            f"🔵 MTProto\n📅 {to_jalali(item['date'])}\n\n[⚡ کلیک کنید]({link})",
             parse_mode=ParseMode.MARKDOWN,
             disable_web_page_preview=True
         )
     else:
         await message.answer(
-            f"🔵 پروکسی\n📅 {date_str}\n\n{text[:400]}",
+            f"🔵 پروکسی\n📅 {to_jalali(item['date'])}\n\n{text[:400]}",
             parse_mode=None,
             disable_web_page_preview=True
         )
 
 async def send_nepster(message: Message, item: Dict):
-    date_str = item["date"].strftime('%Y-%m-%d %H:%M')
     if item.get("file_id"):
         await bot.send_document(
             chat_id=message.chat.id,
             document=item["file_id"],
-            caption=f"🟣 نپستر\n📅 {date_str}\n📄 {item.get('file_name', 'config.npvt')}",
-            parse_mode=None                     # متن ساده برای جلوگیری از تداخل کاراکترها
+            caption=f"🟣 نپستر\n📅 {to_jalali(item['date'])}\n📄 {item.get('file_name', 'config.npvt')}",
+            parse_mode=None
         )
     else:
-        await message.answer(f"🟣 نپستر\n📅 {date_str}\n\n❌ فایل نیست.", parse_mode=None)
+        await message.answer(f"🟣 نپستر\n📅 {to_jalali(item['date'])}\n\n❌ فایل نیست.", parse_mode=None)
 
 # ============ MAIN ============
 async def main():
