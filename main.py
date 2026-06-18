@@ -3,6 +3,8 @@ import logging
 import os
 import random
 import re
+import json
+import requests
 from datetime import datetime
 from threading import Thread
 from typing import List, Dict
@@ -17,7 +19,6 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiohttp import web
-import libsql_client
 
 # ============ CONFIG ============
 logging.basicConfig(level=logging.INFO)
@@ -39,19 +40,38 @@ dp = Dispatcher(storage=storage)
 class SupportState(StatesGroup):
     waiting_for_message = State()
 
-# ============ DATABASE ============
-def get_db_client():
-    """Create Turso database client"""
-    url = f"{DB_URL}?authToken={DB_TOKEN}"
-    return libsql_client.create_client_sync(url)
+# ============ DATABASE (Turso HTTP API) ============
+def db_query(sql: str, params: List = None):
+    """Execute SQL query via Turso HTTP API"""
+    try:
+        url = f"{DB_URL}"
+        headers = {
+            "Authorization": f"Bearer {DB_TOKEN}",
+            "Content-Type": "application/json"
+        }
+        data = {
+            "requests": [
+                {"type": "execute", "stmt": {"sql": sql, "args": params or []}},
+                {"type": "close"}
+            ]
+        }
+        
+        response = requests.post(url, headers=headers, json=data, timeout=10)
+        result = response.json()
+        
+        if "results" in result and result["results"]:
+            return result["results"][0].get("response", {}).get("result", {})
+        return None
+    except Exception as e:
+        logger.error(f"❌ DB error: {e}")
+        return None
 
 def init_database():
     """Initialize database tables"""
     try:
-        client = get_db_client()
-        client.execute("""
+        db_query("""
             CREATE TABLE IF NOT EXISTS configs (
-                id INTEGER PRIMARY KEY,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 message_id INTEGER,
                 text TEXT,
                 date TEXT,
@@ -67,9 +87,8 @@ def init_database():
 def save_to_db(item: Dict):
     """Save item to database"""
     try:
-        client = get_db_client()
-        client.execute("""
-            INSERT OR REPLACE INTO configs (message_id, text, date, type, file_id, file_name)
+        db_query("""
+            INSERT INTO configs (message_id, text, date, type, file_id, file_name)
             VALUES (?, ?, ?, ?, ?, ?)
         """, [
             item["id"],
@@ -86,25 +105,27 @@ def save_to_db(item: Dict):
 def get_from_db(filter_type: str = "all") -> List[Dict]:
     """Get items from database"""
     try:
-        client = get_db_client()
         if filter_type == "all":
-            result = client.execute("SELECT * FROM configs ORDER BY id")
+            sql = "SELECT * FROM configs ORDER BY id"
+            params = []
         else:
-            result = client.execute(
-                "SELECT * FROM configs WHERE type = ? ORDER BY id",
-                [filter_type]
-            )
+            sql = "SELECT * FROM configs WHERE type = ? ORDER BY id"
+            params = [filter_type]
+        
+        result = db_query(sql, params)
         
         items = []
-        for row in result.rows:
-            items.append({
-                "id": row[1],
-                "text": row[2],
-                "date": datetime.strptime(row[3], '%Y-%m-%d %H:%M:%S'),
-                "type": row[4],
-                "file_id": row[5] if row[5] else None,
-                "file_name": row[6] if row[6] else None
-            })
+        if result and "rows" in result:
+            for row in result["rows"]:
+                # row is a list of dicts: [{"type": ..., "value": ...}, ...]
+                items.append({
+                    "id": row[1]["value"],
+                    "text": row[2]["value"],
+                    "date": datetime.strptime(row[3]["value"], '%Y-%m-%d %H:%M:%S'),
+                    "type": row[4]["value"],
+                    "file_id": row[5]["value"] if row[5]["value"] else None,
+                    "file_name": row[6]["value"] if row[6]["value"] else None
+                })
         return items
     except Exception as e:
         logger.error(f"❌ DB fetch error: {e}")
@@ -113,15 +134,14 @@ def get_from_db(filter_type: str = "all") -> List[Dict]:
 def delete_from_db(item_id: int = None, filter_type: str = None):
     """Delete items from database"""
     try:
-        client = get_db_client()
         if filter_type == "all":
-            client.execute("DELETE FROM configs")
+            db_query("DELETE FROM configs")
             logger.info("🗑 Deleted all from DB")
         elif item_id:
-            client.execute("DELETE FROM configs WHERE message_id = ?", [item_id])
+            db_query("DELETE FROM configs WHERE message_id = ?", [item_id])
             logger.info(f"🗑 Deleted item {item_id} from DB")
         elif filter_type:
-            client.execute("DELETE FROM configs WHERE type = ?", [filter_type])
+            db_query("DELETE FROM configs WHERE type = ?", [filter_type])
             logger.info(f"🗑 Deleted all {filter_type} from DB")
     except Exception as e:
         logger.error(f"❌ DB delete error: {e}")
