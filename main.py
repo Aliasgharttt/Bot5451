@@ -134,63 +134,36 @@ def get_main_menu():
     """Main menu with colored buttons"""
     builder = ReplyKeyboardBuilder()
     builder.row(
-        KeyboardButton(text="🎲 همه (رندوم)", style=ButtonStyle.SUCCESS)
+        KeyboardButton(text="V2Ray", style=ButtonStyle.SUCCESS),
+        KeyboardButton(text="Proxy", style=ButtonStyle.SUCCESS)
     )
     builder.row(
-        KeyboardButton(text="🟢 V2Ray", style=ButtonStyle.PRIMARY),
-        KeyboardButton(text="🔵 پروکسی", style=ButtonStyle.SUCCESS)
+        KeyboardButton(text="NPT (NapsternetV)", style=ButtonStyle.SUCCESS)
     )
     builder.row(
-        KeyboardButton(text="🟣 نپستر", style=ButtonStyle.DANGER)
-    )
-    builder.row(
-        KeyboardButton(text="💬 پشتیبانی", style=ButtonStyle.PRIMARY)
+        KeyboardButton(text="Support", style=ButtonStyle.PRIMARY)
     )
     return builder.as_markup(resize_keyboard=True)
 
 # ============ HANDLERS ============
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
+    user = message.from_user
+    # Name as clickable link (blue)
+    user_link = f"[{user.full_name}](tg://user?id={user.id})"
+    
     await message.answer(
-        "🚀 **به ربات پروکسی و کانفیگ خوش آمدید!**\n\n"
+        f"سلام {user_link} 👋 خوش آمدید!\n\n"
         "🔹 **V2Ray**: vless, vmess, trojan, hysteria2\n"
-        "🔹 **پروکسی**: MTProto (لینک مستقیم)\n"
-        "🔹 **نپستر**: فایل .npvt\n\n"
-        "🎲 هر دکمه = ۱ عدد رندوم\n"
+        "🔹 **Proxy**: MTProto (لینک مستقیم)\n"
+        "🔹 **NPT**: فایل .npvt مخصوص NapsternetV\n\n"
+        "🎲 هر دکمه یک کانفیگ رندوم از کانال را ارسال می‌کند.\n"
         "👇 انتخاب کنید:",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=get_main_menu()
     )
 
-@dp.message(F.text == "🎲 همه (رندوم)")
-async def get_all_random(message: Message):
-    v2ray_list = [m for m in proxy_storage if m["type"] == "v2ray"]
-    proxy_list = [m for m in proxy_storage if m["type"] == "proxy"]
-    nepster_list = [m for m in proxy_storage if m["type"] == "nepster"]
-    
-    total = len(v2ray_list) + len(proxy_list) + len(nepster_list)
-    
-    if total == 0:
-        await message.answer(
-            "❌ هیچ لینکی ذخیره نشده.\n📌 در کانال پیام بفرستید.",
-            reply_markup=get_main_menu()
-        )
-        return
-    
-    await message.answer("🎲 **ارسال رندوم از هر دسته:**", parse_mode=ParseMode.MARKDOWN)
-    
-    if v2ray_list:
-        await send_v2ray(message, random.choice(v2ray_list))
-    
-    if proxy_list:
-        await send_proxy(message, random.choice(proxy_list))
-    
-    if nepster_list:
-        await send_nepster(message, random.choice(nepster_list))
-    
-    await message.answer("✅ **دریافت شد!**", reply_markup=get_main_menu())
-
-@dp.message(F.text == "🟢 V2Ray")
+@dp.message(F.text == "V2Ray")
 async def get_v2ray(message: Message):
     items = [m for m in proxy_storage if m["type"] == "v2ray"]
     
@@ -203,7 +176,7 @@ async def get_v2ray(message: Message):
     await send_v2ray(message, item)
     await message.answer("✅", reply_markup=get_main_menu())
 
-@dp.message(F.text == "🔵 پروکسی")
+@dp.message(F.text == "Proxy")
 async def get_proxy(message: Message):
     items = [m for m in proxy_storage if m["type"] == "proxy"]
     
@@ -216,7 +189,7 @@ async def get_proxy(message: Message):
     await send_proxy(message, item)
     await message.answer("✅", reply_markup=get_main_menu())
 
-@dp.message(F.text == "🟣 نپستر")
+@dp.message(F.text == "NPT (NapsternetV)")
 async def get_nepster(message: Message):
     items = [m for m in proxy_storage if m["type"] == "nepster"]
     
@@ -225,12 +198,12 @@ async def get_nepster(message: Message):
         return
     
     item = random.choice(items)
-    await message.answer("🟣 **نپستر رندوم:**", parse_mode=ParseMode.MARKDOWN)
+    await message.answer("🟣 **NPT رندوم:**", parse_mode=ParseMode.MARKDOWN)
     await send_nepster(message, item)
     await message.answer("✅", reply_markup=get_main_menu())
 
 # ============ SUPPORT ============
-@dp.message(F.text == "💬 پشتیبانی")
+@dp.message(F.text == "Support")
 async def support_start(message: Message, state: FSMContext):
     await message.answer(
         "📨 **پشتیبانی**\n\n"
