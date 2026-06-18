@@ -6,12 +6,12 @@ from threading import Thread
 from typing import List, Dict
 
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.enums import ParseMode, ButtonStyle
+from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from aiogram.types import (
     ReplyKeyboardMarkup, KeyboardButton,
     InlineKeyboardMarkup, InlineKeyboardButton,
-    Message
+    Message, KeyboardButtonRequestUser
 )
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
 from aiohttp import web
@@ -21,7 +21,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_ID = os.getenv("CHANNEL_ID")  # Like: -1001234567890
+CHANNEL_ID = os.getenv("CHANNEL_ID")
 PORT = int(os.getenv("PORT", 8080))
 
 if not BOT_TOKEN or not CHANNEL_ID:
@@ -30,7 +30,6 @@ if not BOT_TOKEN or not CHANNEL_ID:
 CHANNEL_ID = int(CHANNEL_ID)
 
 # ============ STORAGE ============
-# In-memory storage (for production use Redis or PostgreSQL)
 proxy_storage: List[Dict] = []
 last_update_time = None
 
@@ -63,13 +62,9 @@ async def fetch_channel_posts():
     global proxy_storage, last_update_time
     
     try:
-        # Get last 5 messages from channel
-        updates = await bot.get_updates(offset=-1, limit=5, timeout=30)
-        
         messages = []
         async for message in bot.get_chat_history(CHANNEL_ID, limit=5):
             if message.text and message.date:
-                # Check if message is within 24 hours
                 if datetime.now() - message.date < timedelta(hours=24):
                     messages.append({
                         "id": message.message_id,
@@ -101,23 +96,23 @@ async def periodic_update():
             await clean_old_posts()
         except Exception as e:
             logger.error(f"Update failed: {e}")
-        await asyncio.sleep(7200)  # 2 hours
+        await asyncio.sleep(7200)
 
 # ============ KEYBOARDS ============
 def get_main_menu():
-    """Main menu with colored ReplyKeyboard"""
+    """Main menu with ReplyKeyboard"""
     builder = ReplyKeyboardBuilder()
     builder.row(
-        KeyboardButton(text="📡 دریافت لینک‌های جدید", style=ButtonStyle.SUCCESS)
+        KeyboardButton(text="📡 دریافت لینک‌های جدید")
     )
     builder.row(
-        KeyboardButton(text="📋 راهنما", style=ButtonStyle.PRIMARY),
-        KeyboardButton(text="💬 پشتیبانی", style=ButtonStyle.DANGER)
+        KeyboardButton(text="📋 راهنما"),
+        KeyboardButton(text="💬 پشتیبانی")
     )
     return builder.as_markup(resize_keyboard=True)
 
 def get_inline_keyboard():
-    """Inline keyboard with colored buttons"""
+    """Inline keyboard"""
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text="🔵 دریافت پروکسی و کانفیگ", callback_data="get_all"),
@@ -144,7 +139,6 @@ async def cmd_start(message: Message):
         reply_markup=get_main_menu()
     )
     
-    # Also show inline keyboard
     await message.answer(
         "⚡ **دسترسی سریع:**",
         parse_mode=ParseMode.MARKDOWN,
@@ -178,7 +172,6 @@ async def support(message: Message):
 async def inline_get_all(callback: types.CallbackQuery):
     await callback.answer("در حال دریافت...")
     await send_proxy_list(callback.message)
-    await callback.message.delete()
 
 @dp.callback_query(F.data == "stats")
 async def inline_stats(callback: types.CallbackQuery):
@@ -229,17 +222,12 @@ async def send_proxy_list(message: Message):
 
 # ============ MAIN ============
 async def main():
-    # Start health check server in separate thread
     health_thread = Thread(target=run_health_server, daemon=True)
     health_thread.start()
     
-    # Initial fetch
     await fetch_channel_posts()
-    
-    # Start periodic update task
     asyncio.create_task(periodic_update())
     
-    # Start bot
     logger.info("Bot started!")
     await dp.start_polling(bot)
 
