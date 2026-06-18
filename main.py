@@ -101,7 +101,7 @@ def save_to_db(item: Dict):
             item.get("file_id", ""),
             item.get("file_name", "")
         ])
-        logger.info(f"💾 Saved to DB: {item['type']}")
+        logger.info(f"💾 Saved: {item['type']}")
     except Exception as e:
         logger.error(f"❌ DB save error: {e}")
 
@@ -439,7 +439,7 @@ async def main():
     init_database()
     Thread(target=run_health_server, daemon=True).start()
     logger.info("✅ Bot ready!")
-    await dp.start_polling(bot, allowed_updates=["message", "channel_post"])
+    await dp.start_polling(bot, allowed_updates=["message", "channel_post", "callback_query"])
 
 if __name__ == "__main__":
     asyncio.run(main())
