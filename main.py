@@ -44,7 +44,7 @@ dp = Dispatcher(storage=storage)
 class SupportState(StatesGroup):
     waiting_for_message = State()
 
-# ============ DATABASE (Turso HTTP API) ============
+# ============ DATABASE (Turso HTTP API - FIXED) ============
 def db_query(sql: str, params: List = None):
     """Execute SQL query via Turso HTTP API"""
     try:
@@ -54,17 +54,21 @@ def db_query(sql: str, params: List = None):
             "Content-Type": "application/json"
         }
         data = {
-            "requests": [
-                {"type": "execute", "stmt": {"sql": sql, "args": params or []}},
-                {"type": "close"}
+            "statements": [
+                {"q": sql, "params": params or []}
             ]
         }
         
         response = requests.post(url, headers=headers, json=data, timeout=10)
         result = response.json()
         
-        if "results" in result and result["results"]:
-            return result["results"][0].get("response", {}).get("result", {})
+        if isinstance(result, list) and len(result) > 0:
+            first = result[0]
+            if "results" in first:
+                return first["results"]
+            elif "error" in first:
+                logger.error(f"❌ DB error: {first['error']}")
+                return None
         return None
     except Exception as e:
         logger.error(f"❌ DB error: {e}")
@@ -73,7 +77,7 @@ def db_query(sql: str, params: List = None):
 def init_database():
     """Initialize database tables"""
     try:
-        db_query("""
+        result = db_query("""
             CREATE TABLE IF NOT EXISTS configs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 message_id INTEGER,
@@ -84,7 +88,10 @@ def init_database():
                 file_name TEXT
             )
         """)
-        logger.info("✅ Database initialized")
+        if result is not None:
+            logger.info("✅ Database initialized")
+        else:
+            logger.error("❌ Database init failed")
     except Exception as e:
         logger.error(f"❌ Database init error: {e}")
 
@@ -122,12 +129,12 @@ def get_from_db(filter_type: str = "all") -> List[Dict]:
         if result and "rows" in result:
             for row in result["rows"]:
                 items.append({
-                    "id": row[1]["value"],
-                    "text": row[2]["value"],
-                    "date": datetime.strptime(row[3]["value"], '%Y-%m-%d %H:%M:%S'),
-                    "type": row[4]["value"],
-                    "file_id": row[5]["value"] if row[5]["value"] else None,
-                    "file_name": row[6]["value"] if row[6]["value"] else None
+                    "id": row[1],
+                    "text": row[2],
+                    "date": datetime.strptime(row[3], '%Y-%m-%d %H:%M:%S'),
+                    "type": row[4],
+                    "file_id": row[5] if row[5] else None,
+                    "file_name": row[6] if row[6] else None
                 })
         return items
     except Exception as e:
@@ -170,22 +177,17 @@ def run_health_server():
 
 # ============ DETECTION ============
 def detect_type(text: str) -> str:
-    """Detect config/proxy type from text"""
     text_lower = text.lower()
-    
     v2ray_protocols = [
         'vmess://', 'vless://', 'trojan://', 'hysteria2://', 'hysteria://',
         'tuic://', 'ss://', 'ssr://', 'shadowrocket://'
     ]
-    
     for protocol in v2ray_protocols:
         if protocol in text_lower:
             return "v2ray"
-    
     return "proxy"
 
 def is_npvt_file(file_name: str = None) -> bool:
-    """Check if file is nepster config"""
     if file_name and file_name.lower().endswith('.npvt'):
         return True
     return False
