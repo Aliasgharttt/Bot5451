@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import random
+import re
 from datetime import datetime
 from threading import Thread
 from typing import List, Dict
@@ -9,7 +10,7 @@ from typing import List, Dict
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.enums import ParseMode, ButtonStyle
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import Message, KeyboardButton
 from aiogram.utils.keyboard import ReplyKeyboardBuilder
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.context import FSMContext
@@ -252,7 +253,6 @@ async def support_receive_message(message: Message, state: FSMContext):
         await state.clear()
         return
     
-    # Format user info
     user = message.from_user
     user_info = (
         f"📩 **پیام پشتیبانی جدید**\n\n"
@@ -288,7 +288,6 @@ async def send_v2ray(message: Message, item: Dict):
     text = item["text"]
     date_str = item["date"].strftime('%Y-%m-%d %H:%M')
     
-    # Extract just the config links from text
     lines = text.strip().split('\n')
     config_text = '\n'.join(line.strip() for line in lines if line.strip())
     
@@ -303,22 +302,15 @@ async def send_proxy(message: Message, item: Dict):
     text = item["text"]
     date_str = item["date"].strftime('%Y-%m-%d %H:%M')
     
-    # Find MTProto link
     lines = text.strip().split('\n')
     proxy_link = None
     
     for line in lines:
         line = line.strip()
         if 't.me/proxy' in line:
-            # Extract just the URL
-            if line.startswith('http'):
-                proxy_link = line
-            else:
-                # Find URL in line
-                import re
-                urls = re.findall(r'https?://t\.me/proxy\S+', line)
-                if urls:
-                    proxy_link = urls[0]
+            urls = re.findall(r'https?://t\.me/proxy\S+', line)
+            if urls:
+                proxy_link = urls[0]
             break
     
     if proxy_link:
