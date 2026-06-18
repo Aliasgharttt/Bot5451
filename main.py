@@ -12,8 +12,8 @@ from typing import List, Dict
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.enums import ParseMode, ButtonStyle
 from aiogram.filters import Command
-from aiogram.types import Message, KeyboardButton
-from aiogram.utils.keyboard import ReplyKeyboardBuilder
+from aiogram.types import Message, KeyboardButton, InlineKeyboardButton
+from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -31,7 +31,6 @@ PORT = int(os.getenv("PORT", "8080"))
 DB_URL = os.getenv("DB_URL")
 DB_TOKEN = os.getenv("DB_TOKEN")
 
-# Convert libsql:// to https://
 if DB_URL and DB_URL.startswith("libsql://"):
     DB_URL = DB_URL.replace("libsql://", "https://")
 
@@ -40,13 +39,15 @@ bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties())
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
-# ============ FSM FOR SUPPORT ============
+# ============ FSM ============
 class SupportState(StatesGroup):
     waiting_for_message = State()
 
-# ============ DATABASE (Turso HTTP API - FIXED) ============
+class ManageState(StatesGroup):
+    waiting_for_delete = State()
+
+# ============ DATABASE ============
 def db_query(sql: str, params: List = None):
-    """Execute SQL query via Turso HTTP API"""
     try:
         url = f"{DB_URL}"
         headers = {
@@ -58,26 +59,22 @@ def db_query(sql: str, params: List = None):
                 {"q": sql, "params": params or []}
             ]
         }
-        
         response = requests.post(url, headers=headers, json=data, timeout=10)
         result = response.json()
-        
         if isinstance(result, list) and len(result) > 0:
             first = result[0]
             if "results" in first:
                 return first["results"]
             elif "error" in first:
                 logger.error(f"❌ DB error: {first['error']}")
-                return None
         return None
     except Exception as e:
         logger.error(f"❌ DB error: {e}")
         return None
 
 def init_database():
-    """Initialize database tables"""
     try:
-        result = db_query("""
+        db_query("""
             CREATE TABLE IF NOT EXISTS configs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 message_id INTEGER,
@@ -88,22 +85,17 @@ def init_database():
                 file_name TEXT
             )
         """)
-        if result is not None:
-            logger.info("✅ Database initialized")
-        else:
-            logger.error("❌ Database init failed")
+        logger.info("✅ Database initialized")
     except Exception as e:
         logger.error(f"❌ Database init error: {e}")
 
 def save_to_db(item: Dict):
-    """Save item to database"""
     try:
         db_query("""
             INSERT INTO configs (message_id, text, date, type, file_id, file_name)
             VALUES (?, ?, ?, ?, ?, ?)
         """, [
-            item["id"],
-            item["text"],
+            item["id"], item["text"],
             item["date"].strftime('%Y-%m-%d %H:%M:%S'),
             item["type"],
             item.get("file_id", ""),
@@ -114,7 +106,6 @@ def save_to_db(item: Dict):
         logger.error(f"❌ DB save error: {e}")
 
 def get_from_db(filter_type: str = "all") -> List[Dict]:
-    """Get items from database"""
     try:
         if filter_type == "all":
             sql = "SELECT * FROM configs ORDER BY id"
@@ -122,13 +113,12 @@ def get_from_db(filter_type: str = "all") -> List[Dict]:
         else:
             sql = "SELECT * FROM configs WHERE type = ? ORDER BY id"
             params = [filter_type]
-        
         result = db_query(sql, params)
-        
         items = []
         if result and "rows" in result:
             for row in result["rows"]:
                 items.append({
+                    "db_id": row[0],
                     "id": row[1],
                     "text": row[2],
                     "date": datetime.strptime(row[3], '%Y-%m-%d %H:%M:%S'),
@@ -141,18 +131,14 @@ def get_from_db(filter_type: str = "all") -> List[Dict]:
         logger.error(f"❌ DB fetch error: {e}")
         return []
 
-def delete_from_db(item_id: int = None, filter_type: str = None):
-    """Delete items from database"""
+def delete_from_db(db_id: int = None, filter_type: str = None):
     try:
         if filter_type == "all":
             db_query("DELETE FROM configs")
-            logger.info("🗑 Deleted all from DB")
-        elif item_id:
-            db_query("DELETE FROM configs WHERE message_id = ?", [item_id])
-            logger.info(f"🗑 Deleted item {item_id} from DB")
+        elif db_id:
+            db_query("DELETE FROM configs WHERE id = ?", [db_id])
         elif filter_type:
             db_query("DELETE FROM configs WHERE type = ?", [filter_type])
-            logger.info(f"🗑 Deleted all {filter_type} from DB")
     except Exception as e:
         logger.error(f"❌ DB delete error: {e}")
 
@@ -167,7 +153,6 @@ async def start_health_server():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
-    logger.info(f"Health server on {PORT}")
 
 def run_health_server():
     loop = asyncio.new_event_loop()
@@ -178,55 +163,42 @@ def run_health_server():
 # ============ DETECTION ============
 def detect_type(text: str) -> str:
     text_lower = text.lower()
-    v2ray_protocols = [
-        'vmess://', 'vless://', 'trojan://', 'hysteria2://', 'hysteria://',
-        'tuic://', 'ss://', 'ssr://', 'shadowrocket://'
-    ]
-    for protocol in v2ray_protocols:
+    for protocol in ['vmess://', 'vless://', 'trojan://', 'hysteria2://', 'hysteria://', 'tuic://', 'ss://', 'ssr://', 'shadowrocket://']:
         if protocol in text_lower:
             return "v2ray"
     return "proxy"
 
 def is_npvt_file(file_name: str = None) -> bool:
-    if file_name and file_name.lower().endswith('.npvt'):
-        return True
-    return False
+    return file_name and file_name.lower().endswith('.npvt')
 
 # ============ CHANNEL POST HANDLER ============
 @dp.channel_post()
 async def handle_channel_post(message: Message):
     if message.chat.id != CHANNEL_ID:
         return
-    
     if message.document:
         file_name = message.document.file_name or ""
         if is_npvt_file(file_name):
-            item = {
+            save_to_db({
                 "id": message.message_id,
                 "text": message.caption or "🟣 نپستر کانفیگ",
                 "date": message.date,
                 "type": "nepster",
                 "file_id": message.document.file_id,
                 "file_name": file_name
-            }
-            save_to_db(item)
-            logger.info(f"✅ Nepster saved: {file_name}")
+            })
             return
-    
     if message.text:
-        msg_type = detect_type(message.text)
-        item = {
+        save_to_db({
             "id": message.message_id,
             "text": message.text,
             "date": message.date,
-            "type": msg_type,
+            "type": detect_type(message.text),
             "file_id": None,
             "file_name": ""
-        }
-        save_to_db(item)
-        logger.info(f"✅ {msg_type} saved!")
+        })
 
-# ============ KEYBOARD ============
+# ============ KEYBOARDS ============
 def get_main_menu():
     builder = ReplyKeyboardBuilder()
     builder.row(
@@ -240,6 +212,23 @@ def get_main_menu():
         KeyboardButton(text="Support", style=ButtonStyle.PRIMARY)
     )
     return builder.as_markup(resize_keyboard=True)
+
+def get_manage_menu():
+    v2ray_count = len(get_from_db("v2ray"))
+    proxy_count = len(get_from_db("proxy"))
+    nepster_count = len(get_from_db("nepster"))
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text=f"🟢 V2Ray ({v2ray_count})", callback_data="manage_v2ray"),
+        InlineKeyboardButton(text=f"🔵 Proxy ({proxy_count})", callback_data="manage_proxy")
+    )
+    builder.row(
+        InlineKeyboardButton(text=f"🟣 NPT ({nepster_count})", callback_data="manage_nepster")
+    )
+    builder.row(
+        InlineKeyboardButton(text="❌ خروج", callback_data="manage_exit")
+    )
+    return builder.as_markup()
 
 # ============ HANDLERS ============
 @dp.message(Command("start"))
@@ -285,11 +274,94 @@ async def get_nepster(message: Message):
     await send_nepster(message, item)
     await message.answer("✅", reply_markup=get_main_menu())
 
+# ============ MANAGE PANEL ============
+@dp.message(Command("manage"))
+async def cmd_manage(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    await state.clear()
+    v2ray_count = len(get_from_db("v2ray"))
+    proxy_count = len(get_from_db("proxy"))
+    nepster_count = len(get_from_db("nepster"))
+    await message.answer(
+        f"🛠 **پنل مدیریت**\n\n"
+        f"🟢 V2Ray: {v2ray_count}\n"
+        f"🔵 پروکسی: {proxy_count}\n"
+        f"🟣 نپستر: {nepster_count}\n"
+        f"📊 کل: {v2ray_count + proxy_count + nepster_count}",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=get_manage_menu()
+    )
+
+@dp.callback_query(F.data == "manage_exit")
+async def manage_exit(callback: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    await callback.message.delete()
+
+@dp.callback_query(F.data.in_(["manage_v2ray", "manage_proxy", "manage_nepster"]))
+async def manage_show_list(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("دسترسی غیرمجاز", show_alert=True)
+        return
+    type_map = {
+        "manage_v2ray": ("v2ray", "🟢 V2Ray"),
+        "manage_proxy": ("proxy", "🔵 پروکسی"),
+        "manage_nepster": ("nepster", "🟣 نپستر")
+    }
+    filter_type, title = type_map[callback.data]
+    items = get_from_db(filter_type)
+    if not items:
+        await callback.answer(f"{title} خالیه", show_alert=True)
+        return
+    await state.update_data(manage_type=filter_type, manage_items=items)
+    await state.set_state(ManageState.waiting_for_delete)
+    text = f"{title} ها:\n\n"
+    for i, item in enumerate(items, 1):
+        if filter_type == "nepster":
+            text += f"{i}️⃣ {item.get('file_name', 'Unknown')}\n"
+        else:
+            text += f"{i}️⃣ {item['text'][:70].replace(chr(10), ' ')}...\n"
+        text += f"   📅 {item['date'].strftime('%Y-%m-%d %H:%M')}\n\n"
+    text += "شماره رو بفرست یا بنویس **برگشت**"
+    await callback.message.edit_text(text, parse_mode=ParseMode.MARKDOWN)
+
+@dp.message(ManageState.waiting_for_delete)
+async def manage_delete(message: Message, state: FSMContext):
+    if message.text == "برگشت":
+        await state.clear()
+        return await cmd_manage(message, state)
+    try:
+        index = int(message.text) - 1
+    except ValueError:
+        return await message.answer("عدد یا **برگشت**")
+    data = await state.get_data()
+    items = data.get("manage_items", [])
+    manage_type = data.get("manage_type", "")
+    if index < 0 or index >= len(items):
+        return await message.answer(f"بین ۱ تا {len(items)}")
+    delete_from_db(db_id=items[index]["db_id"])
+    await message.answer(f"✅ شماره {index + 1} حذف شد!")
+    items = get_from_db(manage_type)
+    if not items:
+        await state.clear()
+        return await cmd_manage(message, state)
+    await state.update_data(manage_items=items)
+    type_names = {"v2ray": "🟢 V2Ray", "proxy": "🔵 پروکسی", "nepster": "🟣 نپستر"}
+    text = f"{type_names.get(manage_type, '')} ها:\n\n"
+    for i, item in enumerate(items, 1):
+        if manage_type == "nepster":
+            text += f"{i}️⃣ {item.get('file_name', 'Unknown')}\n"
+        else:
+            text += f"{i}️⃣ {item['text'][:70].replace(chr(10), ' ')}...\n"
+        text += f"   📅 {item['date'].strftime('%Y-%m-%d %H:%M')}\n\n"
+    text += "شماره رو بفرست یا بنویس **برگشت**"
+    await message.answer(text, parse_mode=ParseMode.MARKDOWN)
+
 # ============ SUPPORT ============
 @dp.message(F.text == "Support")
 async def support_start(message: Message, state: FSMContext):
     await message.answer(
-        "📨 **پشتیبانی**\n\nپیام خود را بنویسید تا برای ادمین ارسال شود.\n🚫 برای لغو، /cancel را بزنید.",
+        "📨 **پشتیبانی**\n\nپیام خود را بنویسید.\n🚫 لغو: /cancel",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=types.ReplyKeyboardRemove()
     )
@@ -302,61 +374,51 @@ async def support_receive_message(message: Message, state: FSMContext):
         await message.answer("❌ لغو شد.", reply_markup=get_main_menu())
         return
     if not ADMIN_ID:
-        await message.answer("❌ پشتیبانی در دسترس نیست.", reply_markup=get_main_menu())
         await state.clear()
         return
     user = message.from_user
-    user_info = (
-        f"📩 **پیام پشتیبانی جدید**\n\n"
-        f"👤 **کاربر:** {user.full_name}\n"
-        f"🆔 **یوزرنیم:** @{user.username if user.username else 'ندارد'}\n"
-        f"🔢 **آیدی عددی:** `{user.id}`\n"
-        f"🕐 **تاریخ:** {message.date.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-        f"📝 **پیام:**\n{message.text}"
+    info = (
+        f"📩 **پیام پشتیبانی**\n\n"
+        f"👤 {user.full_name}\n"
+        f"🆔 @{user.username or 'ندارد'}\n"
+        f"🔢 `{user.id}`\n"
+        f"🕐 {message.date.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        f"📝 {message.text}"
     )
     try:
-        await bot.send_message(ADMIN_ID, user_info, parse_mode=ParseMode.MARKDOWN)
-        await message.answer("✅ پیام شما با موفقیت ارسال شد.", reply_markup=get_main_menu())
+        await bot.send_message(ADMIN_ID, info, parse_mode=ParseMode.MARKDOWN)
+        await message.answer("✅ ارسال شد.", reply_markup=get_main_menu())
     except Exception as e:
-        logger.error(f"Support forward failed: {e}")
-        await message.answer("❌ خطا در ارسال پیام.", reply_markup=get_main_menu())
+        await message.answer("❌ خطا.", reply_markup=get_main_menu())
     await state.clear()
 
 # ============ SEND FUNCTIONS ============
 async def send_v2ray(message: Message, item: Dict):
-    text = item["text"]
-    date_str = item["date"].strftime('%Y-%m-%d %H:%M')
-    lines = text.strip().split('\n')
-    config_text = '\n'.join(line.strip() for line in lines if line.strip())
+    text = '\n'.join(line.strip() for line in item["text"].split('\n') if line.strip())
     await message.answer(
-        f"🟢 **V2Ray**\n📅 {date_str}\n\n{config_text[:1000]}",
-        parse_mode=ParseMode.MARKDOWN,
-        disable_web_page_preview=True
+        f"🟢 **V2Ray**\n📅 {item['date'].strftime('%Y-%m-%d %H:%M')}\n\n{text[:1000]}",
+        parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True
     )
 
 async def send_proxy(message: Message, item: Dict):
     text = item["text"]
     date_str = item["date"].strftime('%Y-%m-%d %H:%M')
-    lines = text.strip().split('\n')
-    proxy_link = None
-    for line in lines:
-        line = line.strip()
+    link = None
+    for line in text.split('\n'):
         if 't.me/proxy' in line:
             urls = re.findall(r'https?://t\.me/proxy\S+', line)
             if urls:
-                proxy_link = urls[0]
+                link = urls[0]
             break
-    if proxy_link:
+    if link:
         await message.answer(
-            f"🔵 **پروکسی MTProto**\n📅 {date_str}\n\n[⚡ برای اتصال کلیک کنید]({proxy_link})",
-            parse_mode=ParseMode.MARKDOWN,
-            disable_web_page_preview=True
+            f"🔵 **MTProto**\n📅 {date_str}\n\n[⚡ کلیک کنید]({link})",
+            parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True
         )
     else:
         await message.answer(
             f"🔵 **پروکسی**\n📅 {date_str}\n\n{text[:400]}",
-            parse_mode=ParseMode.MARKDOWN,
-            disable_web_page_preview=True
+            parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True
         )
 
 async def send_nepster(message: Message, item: Dict):
@@ -369,10 +431,7 @@ async def send_nepster(message: Message, item: Dict):
             parse_mode=ParseMode.MARKDOWN
         )
     else:
-        await message.answer(
-            f"🟣 **نپستر**\n📅 {date_str}\n\n❌ فایل در دسترس نیست.",
-            parse_mode=ParseMode.MARKDOWN
-        )
+        await message.answer(f"🟣 **نپستر**\n📅 {date_str}\n\n❌ فایل نیست.", parse_mode=ParseMode.MARKDOWN)
 
 # ============ MAIN ============
 async def main():
