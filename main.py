@@ -6,6 +6,7 @@ import re
 import json
 import requests
 import jdatetime
+import pytz
 from datetime import datetime
 from threading import Thread
 from typing import List, Dict
@@ -145,7 +146,10 @@ def delete_from_db(db_id: int = None, filter_type: str = None):
 
 # ============ JALALI HELPER ============
 def to_jalali(dt: datetime) -> str:
-    jd = jdatetime.datetime.fromgregorian(datetime=dt)
+    """Convert datetime to Iran timezone and Jalali string"""
+    iran_tz = pytz.timezone('Asia/Tehran')
+    dt_iran = dt.astimezone(iran_tz)
+    jd = jdatetime.datetime.fromgregorian(datetime=dt_iran)
     return jd.strftime('%Y/%m/%d %H:%M')
 
 # ============ HEALTH CHECK ============
@@ -335,46 +339,37 @@ async def manage_delete(message: Message, state: FSMContext):
     items = data.get("manage_items", [])
     manage_type = data.get("manage_type", "")
     
-    # "all" = delete all
     if message.text.lower() == "all":
         delete_from_db(filter_type=manage_type)
         await message.answer(f"✅ همه {len(items)} مورد حذف شدند!")
         await state.clear()
         return await cmd_manage(message, state)
     
-    # Parse numbers
     text = message.text.strip()
     indices = set()
     
     try:
         if '-' in text and ',' not in text:
-            # Range: 1-9
             start, end = text.split('-')
             for i in range(int(start), int(end) + 1):
                 indices.add(i - 1)
         elif ',' in text:
-            # Multiple: 1,4,7
             for part in text.split(','):
                 indices.add(int(part.strip()) - 1)
         else:
-            # Single: 3
             indices.add(int(text) - 1)
     except ValueError:
         return await message.answer("❌ فرمت اشتباه. مثال: ۳ یا ۱,۴,۷ یا ۱-۹ یا all")
     
-    # Validate
     invalid = [i + 1 for i in indices if i < 0 or i >= len(items)]
     if invalid:
         return await message.answer(f"❌ اعداد {invalid} خارج از محدوده (۱ تا {len(items)})")
     
-    # Delete (from highest index to lowest)
     for index in sorted(indices, reverse=True):
         delete_from_db(db_id=items[index]["db_id"])
     
-    deleted_count = len(indices)
-    await message.answer(f"✅ {deleted_count} مورد حذف شد!")
+    await message.answer(f"✅ {len(indices)} مورد حذف شد!")
     
-    # Refresh list
     items = get_from_db(manage_type)
     if not items:
         await state.clear()
@@ -382,15 +377,15 @@ async def manage_delete(message: Message, state: FSMContext):
     
     await state.update_data(manage_items=items)
     type_names = {"v2ray": "🟢 V2Ray", "proxy": "🔵 پروکسی", "nepster": "🟣 نپستر"}
-    text = f"{type_names.get(manage_type, '')} ها:\n\n"
+    txt = f"{type_names.get(manage_type, '')} ها:\n\n"
     for i, item in enumerate(items, 1):
         if manage_type == "nepster":
-            text += f"{i}️⃣ {item.get('file_name', 'Unknown')}\n"
+            txt += f"{i}️⃣ {item.get('file_name', 'Unknown')}\n"
         else:
-            text += f"{i}️⃣ {item['text'][:70].replace(chr(10), ' ')}...\n"
-        text += f"   📅 {to_jalali(item['date'])}\n\n"
-    text += "شماره (۳) | چندتایی (۱,۴,۷) | بازه (۱-۹) | all"
-    await message.answer(text, parse_mode=ParseMode.MARKDOWN)
+            txt += f"{i}️⃣ {item['text'][:70].replace(chr(10), ' ')}...\n"
+        txt += f"   📅 {to_jalali(item['date'])}\n\n"
+    txt += "شماره (۳) | چندتایی (۱,۴,۷) | بازه (۱-۹) | all"
+    await message.answer(txt, parse_mode=ParseMode.MARKDOWN)
 
 # ============ SUPPORT ============
 @dp.message(F.text == "Support")
