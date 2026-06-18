@@ -241,6 +241,7 @@ async def cmd_start(message: Message):
         reply_markup=get_main_menu()
     )
 
+# ----- اصلاح‌شده: فقط خود کانفیگ ارسال بشه، بدون پیام اضافی -----
 @dp.message(F.text == "V2Ray")
 async def get_v2ray(message: Message):
     items = get_from_db("v2ray")
@@ -248,9 +249,7 @@ async def get_v2ray(message: Message):
         await message.answer("❌ V2Ray یافت نشد.", reply_markup=get_main_menu())
         return
     item = random.choice(items)
-    await message.answer("🟢 **V2Ray رندوم:**", parse_mode=ParseMode.MARKDOWN)
     await send_v2ray(message, item)
-    await message.answer("✅", reply_markup=get_main_menu())
 
 @dp.message(F.text == "Proxy")
 async def get_proxy(message: Message):
@@ -259,9 +258,7 @@ async def get_proxy(message: Message):
         await message.answer("❌ پروکسی یافت نشد.", reply_markup=get_main_menu())
         return
     item = random.choice(items)
-    await message.answer("🔵 **پروکسی رندوم:**", parse_mode=ParseMode.MARKDOWN)
     await send_proxy(message, item)
-    await message.answer("✅", reply_markup=get_main_menu())
 
 @dp.message(F.text == "NPT (NapsternetV)")
 async def get_nepster(message: Message):
@@ -270,9 +267,7 @@ async def get_nepster(message: Message):
         await message.answer("❌ نپستر یافت نشد.", reply_markup=get_main_menu())
         return
     item = random.choice(items)
-    await message.answer("🟣 **NPT رندوم:**", parse_mode=ParseMode.MARKDOWN)
     await send_nepster(message, item)
-    await message.answer("✅", reply_markup=get_main_menu())
 
 # ============ MANAGE PANEL ============
 @dp.message(Command("manage"))
@@ -393,11 +388,14 @@ async def support_receive_message(message: Message, state: FSMContext):
     await state.clear()
 
 # ============ SEND FUNCTIONS ============
+
+# ----- اصلاح‌شده: ارسال V2Ray به صورت متن ساده (بدون Markdown) -----
 async def send_v2ray(message: Message, item: Dict):
     text = '\n'.join(line.strip() for line in item["text"].split('\n') if line.strip())
     await message.answer(
-        f"🟢 **V2Ray**\n📅 {item['date'].strftime('%Y-%m-%d %H:%M')}\n\n{text[:1000]}",
-        parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True
+        f"🟢 V2Ray\n📅 {item['date'].strftime('%Y-%m-%d %H:%M')}\n\n{text[:1000]}",
+        parse_mode=None,                      # متن ساده، Markdown خراب نمی‌شه
+        disable_web_page_preview=True
     )
 
 async def send_proxy(message: Message, item: Dict):
@@ -412,13 +410,15 @@ async def send_proxy(message: Message, item: Dict):
             break
     if link:
         await message.answer(
-            f"🔵 **MTProto**\n📅 {date_str}\n\n[⚡ کلیک کنید]({link})",
-            parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True
+            f"🔵 MTProto\n📅 {date_str}\n\n[⚡ کلیک کنید]({link})",
+            parse_mode=ParseMode.MARKDOWN,
+            disable_web_page_preview=True
         )
     else:
         await message.answer(
-            f"🔵 **پروکسی**\n📅 {date_str}\n\n{text[:400]}",
-            parse_mode=ParseMode.MARKDOWN, disable_web_page_preview=True
+            f"🔵 پروکسی\n📅 {date_str}\n\n{text[:400]}",
+            parse_mode=None,
+            disable_web_page_preview=True
         )
 
 async def send_nepster(message: Message, item: Dict):
@@ -427,11 +427,11 @@ async def send_nepster(message: Message, item: Dict):
         await bot.send_document(
             chat_id=message.chat.id,
             document=item["file_id"],
-            caption=f"🟣 **نپستر**\n📅 {date_str}\n📄 {item.get('file_name', 'config.npvt')}",
-            parse_mode=ParseMode.MARKDOWN
+            caption=f"🟣 نپستر\n📅 {date_str}\n📄 {item.get('file_name', 'config.npvt')}",
+            parse_mode=None                     # متن ساده برای جلوگیری از تداخل کاراکترها
         )
     else:
-        await message.answer(f"🟣 **نپستر**\n📅 {date_str}\n\n❌ فایل نیست.", parse_mode=ParseMode.MARKDOWN)
+        await message.answer(f"🟣 نپستر\n📅 {date_str}\n\n❌ فایل نیست.", parse_mode=None)
 
 # ============ MAIN ============
 async def main():
