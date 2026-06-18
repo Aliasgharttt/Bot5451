@@ -31,6 +31,10 @@ PORT = int(os.getenv("PORT", "8080"))
 DB_URL = os.getenv("DB_URL")
 DB_TOKEN = os.getenv("DB_TOKEN")
 
+# Convert libsql:// to https://
+if DB_URL and DB_URL.startswith("libsql://"):
+    DB_URL = DB_URL.replace("libsql://", "https://")
+
 # ============ BOT SETUP ============
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties())
 storage = MemoryStorage()
@@ -117,7 +121,6 @@ def get_from_db(filter_type: str = "all") -> List[Dict]:
         items = []
         if result and "rows" in result:
             for row in result["rows"]:
-                # row is a list of dicts: [{"type": ..., "value": ...}, ...]
                 items.append({
                     "id": row[1]["value"],
                     "text": row[2]["value"],
@@ -193,7 +196,6 @@ async def handle_channel_post(message: Message):
     if message.chat.id != CHANNEL_ID:
         return
     
-    # Handle NEPSTER file (.npvt)
     if message.document:
         file_name = message.document.file_name or ""
         if is_npvt_file(file_name):
@@ -209,10 +211,8 @@ async def handle_channel_post(message: Message):
             logger.info(f"✅ Nepster saved: {file_name}")
             return
     
-    # Handle text messages
     if message.text:
         msg_type = detect_type(message.text)
-        
         item = {
             "id": message.message_id,
             "text": message.text,
@@ -226,7 +226,6 @@ async def handle_channel_post(message: Message):
 
 # ============ KEYBOARD ============
 def get_main_menu():
-    """Main menu with colored buttons"""
     builder = ReplyKeyboardBuilder()
     builder.row(
         KeyboardButton(text="V2Ray", style=ButtonStyle.SUCCESS),
@@ -245,7 +244,6 @@ def get_main_menu():
 async def cmd_start(message: Message):
     user = message.from_user
     user_link = f"[{user.full_name}](tg://user?id={user.id})"
-    
     await message.answer(
         f"سلام {user_link} 👋 خوش آمدید!",
         parse_mode=ParseMode.MARKDOWN,
@@ -255,11 +253,9 @@ async def cmd_start(message: Message):
 @dp.message(F.text == "V2Ray")
 async def get_v2ray(message: Message):
     items = get_from_db("v2ray")
-    
     if not items:
         await message.answer("❌ V2Ray یافت نشد.", reply_markup=get_main_menu())
         return
-    
     item = random.choice(items)
     await message.answer("🟢 **V2Ray رندوم:**", parse_mode=ParseMode.MARKDOWN)
     await send_v2ray(message, item)
@@ -268,11 +264,9 @@ async def get_v2ray(message: Message):
 @dp.message(F.text == "Proxy")
 async def get_proxy(message: Message):
     items = get_from_db("proxy")
-    
     if not items:
         await message.answer("❌ پروکسی یافت نشد.", reply_markup=get_main_menu())
         return
-    
     item = random.choice(items)
     await message.answer("🔵 **پروکسی رندوم:**", parse_mode=ParseMode.MARKDOWN)
     await send_proxy(message, item)
@@ -281,11 +275,9 @@ async def get_proxy(message: Message):
 @dp.message(F.text == "NPT (NapsternetV)")
 async def get_nepster(message: Message):
     items = get_from_db("nepster")
-    
     if not items:
         await message.answer("❌ نپستر یافت نشد.", reply_markup=get_main_menu())
         return
-    
     item = random.choice(items)
     await message.answer("🟣 **NPT رندوم:**", parse_mode=ParseMode.MARKDOWN)
     await send_nepster(message, item)
@@ -295,9 +287,7 @@ async def get_nepster(message: Message):
 @dp.message(F.text == "Support")
 async def support_start(message: Message, state: FSMContext):
     await message.answer(
-        "📨 **پشتیبانی**\n\n"
-        "پیام خود را بنویسید تا برای ادمین ارسال شود.\n"
-        "🚫 برای لغو، /cancel را بزنید.",
+        "📨 **پشتیبانی**\n\nپیام خود را بنویسید تا برای ادمین ارسال شود.\n🚫 برای لغو، /cancel را بزنید.",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=types.ReplyKeyboardRemove()
     )
@@ -309,12 +299,10 @@ async def support_receive_message(message: Message, state: FSMContext):
         await state.clear()
         await message.answer("❌ لغو شد.", reply_markup=get_main_menu())
         return
-    
     if not ADMIN_ID:
         await message.answer("❌ پشتیبانی در دسترس نیست.", reply_markup=get_main_menu())
         await state.clear()
         return
-    
     user = message.from_user
     user_info = (
         f"📩 **پیام پشتیبانی جدید**\n\n"
@@ -324,24 +312,20 @@ async def support_receive_message(message: Message, state: FSMContext):
         f"🕐 **تاریخ:** {message.date.strftime('%Y-%m-%d %H:%M:%S')}\n\n"
         f"📝 **پیام:**\n{message.text}"
     )
-    
     try:
         await bot.send_message(ADMIN_ID, user_info, parse_mode=ParseMode.MARKDOWN)
         await message.answer("✅ پیام شما با موفقیت ارسال شد.", reply_markup=get_main_menu())
     except Exception as e:
         logger.error(f"Support forward failed: {e}")
         await message.answer("❌ خطا در ارسال پیام.", reply_markup=get_main_menu())
-    
     await state.clear()
 
 # ============ SEND FUNCTIONS ============
 async def send_v2ray(message: Message, item: Dict):
     text = item["text"]
     date_str = item["date"].strftime('%Y-%m-%d %H:%M')
-    
     lines = text.strip().split('\n')
     config_text = '\n'.join(line.strip() for line in lines if line.strip())
-    
     await message.answer(
         f"🟢 **V2Ray**\n📅 {date_str}\n\n{config_text[:1000]}",
         parse_mode=ParseMode.MARKDOWN,
@@ -351,10 +335,8 @@ async def send_v2ray(message: Message, item: Dict):
 async def send_proxy(message: Message, item: Dict):
     text = item["text"]
     date_str = item["date"].strftime('%Y-%m-%d %H:%M')
-    
     lines = text.strip().split('\n')
     proxy_link = None
-    
     for line in lines:
         line = line.strip()
         if 't.me/proxy' in line:
@@ -362,7 +344,6 @@ async def send_proxy(message: Message, item: Dict):
             if urls:
                 proxy_link = urls[0]
             break
-    
     if proxy_link:
         await message.answer(
             f"🔵 **پروکسی MTProto**\n📅 {date_str}\n\n[⚡ برای اتصال کلیک کنید]({proxy_link})",
@@ -378,7 +359,6 @@ async def send_proxy(message: Message, item: Dict):
 
 async def send_nepster(message: Message, item: Dict):
     date_str = item["date"].strftime('%Y-%m-%d %H:%M')
-    
     if item.get("file_id"):
         await bot.send_document(
             chat_id=message.chat.id,
@@ -395,12 +375,8 @@ async def send_nepster(message: Message, item: Dict):
 # ============ MAIN ============
 async def main():
     logger.info("🚀 Starting bot...")
-    
-    # Initialize database
     init_database()
-    
     Thread(target=run_health_server, daemon=True).start()
-    
     logger.info("✅ Bot ready!")
     await dp.start_polling(bot, allowed_updates=["message", "channel_post"])
 
