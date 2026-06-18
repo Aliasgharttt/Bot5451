@@ -47,7 +47,7 @@ class SupportState(StatesGroup):
 class ManageState(StatesGroup):
     waiting_for_delete = State()
 
-# ============ DATABASE (Turso HTTP API) ============
+# ============ DATABASE ============
 def db_query(sql: str, params: List = None):
     try:
         url = f"{DB_URL}"
@@ -141,12 +141,9 @@ def get_from_db(filter_type: str = "all") -> List[Dict]:
         logger.error(f"❌ DB fetch error: {e}")
         return []
 
-def delete_from_db(db_id: int = None, filter_type: str = None):
+def delete_from_db(db_id: int = None):
     try:
-        if filter_type == "all":
-            db_query("DELETE FROM configs")
-            logger.info("🗑 Deleted all from DB")
-        elif db_id:
+        if db_id:
             db_query("DELETE FROM configs WHERE id = ?", [db_id])
             logger.info(f"🗑 Deleted item {db_id} from DB")
     except Exception as e:
@@ -238,7 +235,6 @@ def get_main_menu():
     return builder.as_markup(resize_keyboard=True)
 
 def get_manage_menu():
-    """Inline keyboard for manage panel"""
     v2ray_count = len(get_from_db("v2ray"))
     proxy_count = len(get_from_db("proxy"))
     nepster_count = len(get_from_db("nepster"))
@@ -303,7 +299,6 @@ async def get_nepster(message: Message):
 # ============ MANAGE PANEL ============
 @dp.message(Command("manage"))
 async def cmd_manage(message: Message, state: FSMContext):
-    # Check if admin
     if message.from_user.id != ADMIN_ID:
         await message.answer("❌ شما دسترسی ندارید.")
         return
@@ -455,7 +450,6 @@ async def manage_delete(message: Message, state: FSMContext):
     
     await message.answer(f"✅ شماره {index + 1} حذف شد!")
     
-    # Refresh list
     items = get_from_db(manage_type)
     await state.update_data(manage_items=items)
     
@@ -478,7 +472,6 @@ async def manage_delete(message: Message, state: FSMContext):
         )
         return
     
-    # Show updated list
     type_names = {"v2ray": "🟢 V2Ray ها", "proxy": "🔵 پروکسی‌ها", "nepster": "🟣 نپستر ها"}
     text = f"{type_names.get(manage_type, 'آیتم ها')}:\n\n"
     
@@ -574,4 +567,13 @@ async def send_nepster(message: Message, item: Dict):
         await bot.send_document(
             chat_id=message.chat.id,
             document=item["file_id"],
-            caption=f"🟣 **نپستر**\n📅 {date_str
+            caption=f"🟣 **نپستر**\n📅 {date_str}\n📄 {item.get('file_name', 'config.npvt')}",
+            parse_mode=ParseMode.MARKDOWN
+        )
+    else:
+        await message.answer(
+            f"🟣 **نپستر**\n📅 {date_str}\n\n❌ فایل در دسترس نیست.",
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+# ============ MA
