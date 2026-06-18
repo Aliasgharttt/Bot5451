@@ -145,7 +145,6 @@ def delete_from_db(db_id: int = None, filter_type: str = None):
 
 # ============ JALALI HELPER ============
 def to_jalali(dt: datetime) -> str:
-    """Convert datetime to Jalali string"""
     jd = jdatetime.datetime.fromgregorian(datetime=dt)
     return jd.strftime('%Y/%m/%d %H:%M')
 
@@ -323,7 +322,7 @@ async def manage_show_list(callback: types.CallbackQuery, state: FSMContext):
         else:
             text += f"{i}️⃣ {item['text'][:70].replace(chr(10), ' ')}...\n"
         text += f"   📅 {to_jalali(item['date'])}\n\n"
-    text += "شماره رو بفرست یا بنویس **برگشت**"
+    text += "شماره (۳) | چندتایی (۱,۴,۷) | بازه (۱-۹) | all"
     await callback.message.edit_text(text, parse_mode=ParseMode.MARKDOWN)
 
 @dp.message(ManageState.waiting_for_delete)
@@ -331,21 +330,56 @@ async def manage_delete(message: Message, state: FSMContext):
     if message.text == "برگشت":
         await state.clear()
         return await cmd_manage(message, state)
-    try:
-        index = int(message.text) - 1
-    except ValueError:
-        return await message.answer("عدد یا **برگشت**")
+    
     data = await state.get_data()
     items = data.get("manage_items", [])
     manage_type = data.get("manage_type", "")
-    if index < 0 or index >= len(items):
-        return await message.answer(f"بین ۱ تا {len(items)}")
-    delete_from_db(db_id=items[index]["db_id"])
-    await message.answer(f"✅ شماره {index + 1} حذف شد!")
+    
+    # "all" = delete all
+    if message.text.lower() == "all":
+        delete_from_db(filter_type=manage_type)
+        await message.answer(f"✅ همه {len(items)} مورد حذف شدند!")
+        await state.clear()
+        return await cmd_manage(message, state)
+    
+    # Parse numbers
+    text = message.text.strip()
+    indices = set()
+    
+    try:
+        if '-' in text and ',' not in text:
+            # Range: 1-9
+            start, end = text.split('-')
+            for i in range(int(start), int(end) + 1):
+                indices.add(i - 1)
+        elif ',' in text:
+            # Multiple: 1,4,7
+            for part in text.split(','):
+                indices.add(int(part.strip()) - 1)
+        else:
+            # Single: 3
+            indices.add(int(text) - 1)
+    except ValueError:
+        return await message.answer("❌ فرمت اشتباه. مثال: ۳ یا ۱,۴,۷ یا ۱-۹ یا all")
+    
+    # Validate
+    invalid = [i + 1 for i in indices if i < 0 or i >= len(items)]
+    if invalid:
+        return await message.answer(f"❌ اعداد {invalid} خارج از محدوده (۱ تا {len(items)})")
+    
+    # Delete (from highest index to lowest)
+    for index in sorted(indices, reverse=True):
+        delete_from_db(db_id=items[index]["db_id"])
+    
+    deleted_count = len(indices)
+    await message.answer(f"✅ {deleted_count} مورد حذف شد!")
+    
+    # Refresh list
     items = get_from_db(manage_type)
     if not items:
         await state.clear()
         return await cmd_manage(message, state)
+    
     await state.update_data(manage_items=items)
     type_names = {"v2ray": "🟢 V2Ray", "proxy": "🔵 پروکسی", "nepster": "🟣 نپستر"}
     text = f"{type_names.get(manage_type, '')} ها:\n\n"
@@ -355,7 +389,7 @@ async def manage_delete(message: Message, state: FSMContext):
         else:
             text += f"{i}️⃣ {item['text'][:70].replace(chr(10), ' ')}...\n"
         text += f"   📅 {to_jalali(item['date'])}\n\n"
-    text += "شماره رو بفرست یا بنویس **برگشت**"
+    text += "شماره (۳) | چندتایی (۱,۴,۷) | بازه (۱-۹) | all"
     await message.answer(text, parse_mode=ParseMode.MARKDOWN)
 
 # ============ SUPPORT ============
