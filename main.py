@@ -12,8 +12,8 @@ from typing import List, Dict
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.enums import ParseMode, ButtonStyle
 from aiogram.filters import Command
-from aiogram.types import Message, KeyboardButton
-from aiogram.utils.keyboard import ReplyKeyboardBuilder
+from aiogram.types import Message, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -31,7 +31,6 @@ PORT = int(os.getenv("PORT", "8080"))
 DB_URL = os.getenv("DB_URL")
 DB_TOKEN = os.getenv("DB_TOKEN")
 
-# Convert libsql:// to https://
 if DB_URL and DB_URL.startswith("libsql://"):
     DB_URL = DB_URL.replace("libsql://", "https://")
 
@@ -44,9 +43,12 @@ dp = Dispatcher(storage=storage)
 class SupportState(StatesGroup):
     waiting_for_message = State()
 
-# ============ DATABASE (Turso HTTP API - FIXED) ============
+# ============ FSM FOR MANAGE ============
+class ManageState(StatesGroup):
+    waiting_for_delete = State()
+
+# ============ DATABASE (Turso HTTP API) ============
 def db_query(sql: str, params: List = None):
-    """Execute SQL query via Turso HTTP API"""
     try:
         url = f"{DB_URL}"
         headers = {
@@ -75,7 +77,6 @@ def db_query(sql: str, params: List = None):
         return None
 
 def init_database():
-    """Initialize database tables"""
     try:
         result = db_query("""
             CREATE TABLE IF NOT EXISTS configs (
@@ -96,7 +97,6 @@ def init_database():
         logger.error(f"❌ Database init error: {e}")
 
 def save_to_db(item: Dict):
-    """Save item to database"""
     try:
         db_query("""
             INSERT INTO configs (message_id, text, date, type, file_id, file_name)
@@ -114,7 +114,6 @@ def save_to_db(item: Dict):
         logger.error(f"❌ DB save error: {e}")
 
 def get_from_db(filter_type: str = "all") -> List[Dict]:
-    """Get items from database"""
     try:
         if filter_type == "all":
             sql = "SELECT * FROM configs ORDER BY id"
@@ -129,6 +128,7 @@ def get_from_db(filter_type: str = "all") -> List[Dict]:
         if result and "rows" in result:
             for row in result["rows"]:
                 items.append({
+                    "db_id": row[0],
                     "id": row[1],
                     "text": row[2],
                     "date": datetime.strptime(row[3], '%Y-%m-%d %H:%M:%S'),
@@ -141,18 +141,14 @@ def get_from_db(filter_type: str = "all") -> List[Dict]:
         logger.error(f"❌ DB fetch error: {e}")
         return []
 
-def delete_from_db(item_id: int = None, filter_type: str = None):
-    """Delete items from database"""
+def delete_from_db(db_id: int = None, filter_type: str = None):
     try:
         if filter_type == "all":
             db_query("DELETE FROM configs")
             logger.info("🗑 Deleted all from DB")
-        elif item_id:
-            db_query("DELETE FROM configs WHERE message_id = ?", [item_id])
-            logger.info(f"🗑 Deleted item {item_id} from DB")
-        elif filter_type:
-            db_query("DELETE FROM configs WHERE type = ?", [filter_type])
-            logger.info(f"🗑 Deleted all {filter_type} from DB")
+        elif db_id:
+            db_query("DELETE FROM configs WHERE id = ?", [db_id])
+            logger.info(f"🗑 Deleted item {db_id} from DB")
     except Exception as e:
         logger.error(f"❌ DB delete error: {e}")
 
@@ -226,7 +222,7 @@ async def handle_channel_post(message: Message):
         save_to_db(item)
         logger.info(f"✅ {msg_type} saved!")
 
-# ============ KEYBOARD ============
+# ============ KEYBOARDS ============
 def get_main_menu():
     builder = ReplyKeyboardBuilder()
     builder.row(
@@ -240,6 +236,25 @@ def get_main_menu():
         KeyboardButton(text="Support", style=ButtonStyle.PRIMARY)
     )
     return builder.as_markup(resize_keyboard=True)
+
+def get_manage_menu():
+    """Inline keyboard for manage panel"""
+    v2ray_count = len(get_from_db("v2ray"))
+    proxy_count = len(get_from_db("proxy"))
+    nepster_count = len(get_from_db("nepster"))
+    
+    builder = InlineKeyboardBuilder()
+    builder.row(
+        InlineKeyboardButton(text=f"🟢 V2Ray ({v2ray_count})", callback_data="manage_v2ray"),
+        InlineKeyboardButton(text=f"🔵 Proxy ({proxy_count})", callback_data="manage_proxy")
+    )
+    builder.row(
+        InlineKeyboardButton(text=f"🟣 NPT ({nepster_count})", callback_data="manage_nepster")
+    )
+    builder.row(
+        InlineKeyboardButton(text="❌ خروج", callback_data="manage_exit")
+    )
+    return builder.as_markup()
 
 # ============ HANDLERS ============
 @dp.message(Command("start"))
@@ -284,6 +299,200 @@ async def get_nepster(message: Message):
     await message.answer("🟣 **NPT رندوم:**", parse_mode=ParseMode.MARKDOWN)
     await send_nepster(message, item)
     await message.answer("✅", reply_markup=get_main_menu())
+
+# ============ MANAGE PANEL ============
+@dp.message(Command("manage"))
+async def cmd_manage(message: Message, state: FSMContext):
+    # Check if admin
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("❌ شما دسترسی ندارید.")
+        return
+    
+    await state.clear()
+    
+    v2ray_count = len(get_from_db("v2ray"))
+    proxy_count = len(get_from_db("proxy"))
+    nepster_count = len(get_from_db("nepster"))
+    total = v2ray_count + proxy_count + nepster_count
+    
+    await message.answer(
+        f"🛠 **پنل مدیریت**\n\n"
+        f"📊 **کل:** {total} عدد\n"
+        f"🟢 V2Ray: {v2ray_count}\n"
+        f"🔵 پروکسی: {proxy_count}\n"
+        f"🟣 نپستر: {nepster_count}\n\n"
+        f"یه دسته رو انتخاب کن:",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=get_manage_menu()
+    )
+
+@dp.callback_query(F.data == "manage_v2ray")
+async def manage_v2ray(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ دسترسی غیرمجاز", show_alert=True)
+        return
+    
+    items = get_from_db("v2ray")
+    if not items:
+        await callback.answer("V2Ray خالیه", show_alert=True)
+        return
+    
+    await state.update_data(manage_type="v2ray", manage_items=items)
+    await state.set_state(ManageState.waiting_for_delete)
+    
+    text = "🟢 **V2Ray ها:**\n\n"
+    for i, item in enumerate(items, 1):
+        short_text = item["text"][:80].replace('\n', ' ')
+        text += f"{i}️⃣ `{short_text}...`\n"
+        text += f"   📅 {item['date'].strftime('%Y-%m-%d %H:%M')}\n\n"
+    
+    text += "برای حذف، **شماره** رو بفرست.\nبرای برگشت، **برگشت** رو بنویس."
+    
+    await callback.message.edit_text(text, parse_mode=ParseMode.MARKDOWN)
+    await callback.answer()
+
+@dp.callback_query(F.data == "manage_proxy")
+async def manage_proxy(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ دسترسی غیرمجاز", show_alert=True)
+        return
+    
+    items = get_from_db("proxy")
+    if not items:
+        await callback.answer("پروکسی خالیه", show_alert=True)
+        return
+    
+    await state.update_data(manage_type="proxy", manage_items=items)
+    await state.set_state(ManageState.waiting_for_delete)
+    
+    text = "🔵 **پروکسی‌ها:**\n\n"
+    for i, item in enumerate(items, 1):
+        short_text = item["text"][:80].replace('\n', ' ')
+        text += f"{i}️⃣ `{short_text}...`\n"
+        text += f"   📅 {item['date'].strftime('%Y-%m-%d %H:%M')}\n\n"
+    
+    text += "برای حذف، **شماره** رو بفرست.\nبرای برگشت، **برگشت** رو بنویس."
+    
+    await callback.message.edit_text(text, parse_mode=ParseMode.MARKDOWN)
+    await callback.answer()
+
+@dp.callback_query(F.data == "manage_nepster")
+async def manage_nepster(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ دسترسی غیرمجاز", show_alert=True)
+        return
+    
+    items = get_from_db("nepster")
+    if not items:
+        await callback.answer("نپستر خالیه", show_alert=True)
+        return
+    
+    await state.update_data(manage_type="nepster", manage_items=items)
+    await state.set_state(ManageState.waiting_for_delete)
+    
+    text = "🟣 **نپستر ها:**\n\n"
+    for i, item in enumerate(items, 1):
+        text += f"{i}️⃣ `{item.get('file_name', 'Unknown')}`\n"
+        text += f"   📅 {item['date'].strftime('%Y-%m-%d %H:%M')}\n\n"
+    
+    text += "برای حذف، **شماره** رو بفرست.\nبرای برگشت، **برگشت** رو بنویس."
+    
+    await callback.message.edit_text(text, parse_mode=ParseMode.MARKDOWN)
+    await callback.answer()
+
+@dp.callback_query(F.data == "manage_exit")
+async def manage_exit(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("❌ دسترسی غیرمجاز", show_alert=True)
+        return
+    
+    await state.clear()
+    await callback.message.delete()
+    await callback.answer("خروج از پنل")
+
+@dp.message(ManageState.waiting_for_delete)
+async def manage_delete(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("❌ دسترسی غیرمجاز.")
+        await state.clear()
+        return
+    
+    if message.text == "برگشت":
+        await state.clear()
+        v2ray_count = len(get_from_db("v2ray"))
+        proxy_count = len(get_from_db("proxy"))
+        nepster_count = len(get_from_db("nepster"))
+        total = v2ray_count + proxy_count + nepster_count
+        
+        await message.answer(
+            f"🛠 **پنل مدیریت**\n\n"
+            f"📊 **کل:** {total} عدد\n"
+            f"🟢 V2Ray: {v2ray_count}\n"
+            f"🔵 پروکسی: {proxy_count}\n"
+            f"🟣 نپستر: {nepster_count}\n\n"
+            f"یه دسته رو انتخاب کن:",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=get_manage_menu()
+        )
+        return
+    
+    try:
+        index = int(message.text) - 1
+    except ValueError:
+        await message.answer("❌ یه **عدد** بفرست یا **برگشت**.")
+        return
+    
+    data = await state.get_data()
+    items = data.get("manage_items", [])
+    manage_type = data.get("manage_type", "")
+    
+    if index < 0 or index >= len(items):
+        await message.answer(f"❌ عدد باید بین ۱ تا {len(items)} باشه.")
+        return
+    
+    item_to_delete = items[index]
+    delete_from_db(db_id=item_to_delete["db_id"])
+    
+    await message.answer(f"✅ شماره {index + 1} حذف شد!")
+    
+    # Refresh list
+    items = get_from_db(manage_type)
+    await state.update_data(manage_items=items)
+    
+    if not items:
+        await state.clear()
+        v2ray_count = len(get_from_db("v2ray"))
+        proxy_count = len(get_from_db("proxy"))
+        nepster_count = len(get_from_db("nepster"))
+        total = v2ray_count + proxy_count + nepster_count
+        
+        await message.answer(
+            f"🛠 **پنل مدیریت**\n\n"
+            f"📊 **کل:** {total} عدد\n"
+            f"🟢 V2Ray: {v2ray_count}\n"
+            f"🔵 پروکسی: {proxy_count}\n"
+            f"🟣 نپستر: {nepster_count}\n\n"
+            f"یه دسته رو انتخاب کن:",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=get_manage_menu()
+        )
+        return
+    
+    # Show updated list
+    type_names = {"v2ray": "🟢 V2Ray ها", "proxy": "🔵 پروکسی‌ها", "nepster": "🟣 نپستر ها"}
+    text = f"{type_names.get(manage_type, 'آیتم ها')}:\n\n"
+    
+    for i, item in enumerate(items, 1):
+        if manage_type == "nepster":
+            text += f"{i}️⃣ `{item.get('file_name', 'Unknown')}`\n"
+        else:
+            short_text = item["text"][:80].replace('\n', ' ')
+            text += f"{i}️⃣ `{short_text}...`\n"
+        text += f"   📅 {item['date'].strftime('%Y-%m-%d %H:%M')}\n\n"
+    
+    text += "برای حذف، **شماره** رو بفرست.\nبرای برگشت، **برگشت** رو بنویس."
+    
+    await message.answer(text, parse_mode=ParseMode.MARKDOWN)
 
 # ============ SUPPORT ============
 @dp.message(F.text == "Support")
@@ -365,22 +574,4 @@ async def send_nepster(message: Message, item: Dict):
         await bot.send_document(
             chat_id=message.chat.id,
             document=item["file_id"],
-            caption=f"🟣 **نپستر**\n📅 {date_str}\n📄 {item.get('file_name', 'config.npvt')}",
-            parse_mode=ParseMode.MARKDOWN
-        )
-    else:
-        await message.answer(
-            f"🟣 **نپستر**\n📅 {date_str}\n\n❌ فایل در دسترس نیست.",
-            parse_mode=ParseMode.MARKDOWN
-        )
-
-# ============ MAIN ============
-async def main():
-    logger.info("🚀 Starting bot...")
-    init_database()
-    Thread(target=run_health_server, daemon=True).start()
-    logger.info("✅ Bot ready!")
-    await dp.start_polling(bot, allowed_updates=["message", "channel_post"])
-
-if __name__ == "__main__":
-    asyncio.run(main())
+            caption=f"🟣 **نپستر**\n📅 {date_str
