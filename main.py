@@ -17,6 +17,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiohttp import web
+import libsql_client
 
 # ============ CONFIG ============
 logging.basicConfig(level=logging.INFO)
@@ -26,11 +27,8 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 PORT = int(os.getenv("PORT", "8080"))
-
-# ============ STORAGE ============
-proxy_storage: List[Dict] = []
-last_update_time = None
-known_message_ids = set()
+DB_URL = os.getenv("DB_URL")
+DB_TOKEN = os.getenv("DB_TOKEN")
 
 # ============ BOT SETUP ============
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties())
@@ -40,6 +38,93 @@ dp = Dispatcher(storage=storage)
 # ============ FSM FOR SUPPORT ============
 class SupportState(StatesGroup):
     waiting_for_message = State()
+
+# ============ DATABASE ============
+def get_db_client():
+    """Create Turso database client"""
+    url = f"{DB_URL}?authToken={DB_TOKEN}"
+    return libsql_client.create_client_sync(url)
+
+def init_database():
+    """Initialize database tables"""
+    try:
+        client = get_db_client()
+        client.execute("""
+            CREATE TABLE IF NOT EXISTS configs (
+                id INTEGER PRIMARY KEY,
+                message_id INTEGER,
+                text TEXT,
+                date TEXT,
+                type TEXT,
+                file_id TEXT,
+                file_name TEXT
+            )
+        """)
+        logger.info("✅ Database initialized")
+    except Exception as e:
+        logger.error(f"❌ Database init error: {e}")
+
+def save_to_db(item: Dict):
+    """Save item to database"""
+    try:
+        client = get_db_client()
+        client.execute("""
+            INSERT OR REPLACE INTO configs (message_id, text, date, type, file_id, file_name)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, [
+            item["id"],
+            item["text"],
+            item["date"].strftime('%Y-%m-%d %H:%M:%S'),
+            item["type"],
+            item.get("file_id", ""),
+            item.get("file_name", "")
+        ])
+        logger.info(f"💾 Saved to DB: {item['type']}")
+    except Exception as e:
+        logger.error(f"❌ DB save error: {e}")
+
+def get_from_db(filter_type: str = "all") -> List[Dict]:
+    """Get items from database"""
+    try:
+        client = get_db_client()
+        if filter_type == "all":
+            result = client.execute("SELECT * FROM configs ORDER BY id")
+        else:
+            result = client.execute(
+                "SELECT * FROM configs WHERE type = ? ORDER BY id",
+                [filter_type]
+            )
+        
+        items = []
+        for row in result.rows:
+            items.append({
+                "id": row[1],
+                "text": row[2],
+                "date": datetime.strptime(row[3], '%Y-%m-%d %H:%M:%S'),
+                "type": row[4],
+                "file_id": row[5] if row[5] else None,
+                "file_name": row[6] if row[6] else None
+            })
+        return items
+    except Exception as e:
+        logger.error(f"❌ DB fetch error: {e}")
+        return []
+
+def delete_from_db(item_id: int = None, filter_type: str = None):
+    """Delete items from database"""
+    try:
+        client = get_db_client()
+        if filter_type == "all":
+            client.execute("DELETE FROM configs")
+            logger.info("🗑 Deleted all from DB")
+        elif item_id:
+            client.execute("DELETE FROM configs WHERE message_id = ?", [item_id])
+            logger.info(f"🗑 Deleted item {item_id} from DB")
+        elif filter_type:
+            client.execute("DELETE FROM configs WHERE type = ?", [filter_type])
+            logger.info(f"🗑 Deleted all {filter_type} from DB")
+    except Exception as e:
+        logger.error(f"❌ DB delete error: {e}")
 
 # ============ HEALTH CHECK ============
 async def health_check(request):
@@ -85,49 +170,39 @@ def is_npvt_file(file_name: str = None) -> bool:
 # ============ CHANNEL POST HANDLER ============
 @dp.channel_post()
 async def handle_channel_post(message: Message):
-    global proxy_storage, last_update_time, known_message_ids
-    
     if message.chat.id != CHANNEL_ID:
         return
-    
-    if message.message_id in known_message_ids:
-        return
-    
-    known_message_ids.add(message.message_id)
     
     # Handle NEPSTER file (.npvt)
     if message.document:
         file_name = message.document.file_name or ""
         if is_npvt_file(file_name):
-            proxy_storage.append({
+            item = {
                 "id": message.message_id,
                 "text": message.caption or "🟣 نپستر کانفیگ",
                 "date": message.date,
                 "type": "nepster",
-                "emoji": "🟣",
                 "file_id": message.document.file_id,
                 "file_name": file_name
-            })
-            last_update_time = datetime.now()
+            }
+            save_to_db(item)
             logger.info(f"✅ Nepster saved: {file_name}")
             return
     
     # Handle text messages
     if message.text:
         msg_type = detect_type(message.text)
-        emoji = "🟢" if msg_type == "v2ray" else "🔵"
         
-        proxy_storage.append({
+        item = {
             "id": message.message_id,
             "text": message.text,
             "date": message.date,
             "type": msg_type,
-            "emoji": emoji,
-            "file_id": None
-        })
-        
-        last_update_time = datetime.now()
-        logger.info(f"✅ {msg_type} saved! Total: {len(proxy_storage)}")
+            "file_id": None,
+            "file_name": ""
+        }
+        save_to_db(item)
+        logger.info(f"✅ {msg_type} saved!")
 
 # ============ KEYBOARD ============
 def get_main_menu():
@@ -159,7 +234,7 @@ async def cmd_start(message: Message):
 
 @dp.message(F.text == "V2Ray")
 async def get_v2ray(message: Message):
-    items = [m for m in proxy_storage if m["type"] == "v2ray"]
+    items = get_from_db("v2ray")
     
     if not items:
         await message.answer("❌ V2Ray یافت نشد.", reply_markup=get_main_menu())
@@ -172,7 +247,7 @@ async def get_v2ray(message: Message):
 
 @dp.message(F.text == "Proxy")
 async def get_proxy(message: Message):
-    items = [m for m in proxy_storage if m["type"] == "proxy"]
+    items = get_from_db("proxy")
     
     if not items:
         await message.answer("❌ پروکسی یافت نشد.", reply_markup=get_main_menu())
@@ -185,7 +260,7 @@ async def get_proxy(message: Message):
 
 @dp.message(F.text == "NPT (NapsternetV)")
 async def get_nepster(message: Message):
-    items = [m for m in proxy_storage if m["type"] == "nepster"]
+    items = get_from_db("nepster")
     
     if not items:
         await message.answer("❌ نپستر یافت نشد.", reply_markup=get_main_menu())
@@ -231,27 +306,16 @@ async def support_receive_message(message: Message, state: FSMContext):
     )
     
     try:
-        await bot.send_message(
-            ADMIN_ID,
-            user_info,
-            parse_mode=ParseMode.MARKDOWN
-        )
-        await message.answer(
-            "✅ پیام شما با موفقیت ارسال شد.",
-            reply_markup=get_main_menu()
-        )
+        await bot.send_message(ADMIN_ID, user_info, parse_mode=ParseMode.MARKDOWN)
+        await message.answer("✅ پیام شما با موفقیت ارسال شد.", reply_markup=get_main_menu())
     except Exception as e:
         logger.error(f"Support forward failed: {e}")
-        await message.answer(
-            "❌ خطا در ارسال پیام. لطفاً دوباره تلاش کنید.",
-            reply_markup=get_main_menu()
-        )
+        await message.answer("❌ خطا در ارسال پیام.", reply_markup=get_main_menu())
     
     await state.clear()
 
 # ============ SEND FUNCTIONS ============
 async def send_v2ray(message: Message, item: Dict):
-    """Send V2Ray config as plain text"""
     text = item["text"]
     date_str = item["date"].strftime('%Y-%m-%d %H:%M')
     
@@ -265,7 +329,6 @@ async def send_v2ray(message: Message, item: Dict):
     )
 
 async def send_proxy(message: Message, item: Dict):
-    """Send proxy as clickable link"""
     text = item["text"]
     date_str = item["date"].strftime('%Y-%m-%d %H:%M')
     
@@ -294,7 +357,6 @@ async def send_proxy(message: Message, item: Dict):
         )
 
 async def send_nepster(message: Message, item: Dict):
-    """Send nepster config as file"""
     date_str = item["date"].strftime('%Y-%m-%d %H:%M')
     
     if item.get("file_id"):
@@ -313,6 +375,9 @@ async def send_nepster(message: Message, item: Dict):
 # ============ MAIN ============
 async def main():
     logger.info("🚀 Starting bot...")
+    
+    # Initialize database
+    init_database()
     
     Thread(target=run_health_server, daemon=True).start()
     
