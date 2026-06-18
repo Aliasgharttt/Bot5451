@@ -7,6 +7,7 @@ import json
 import requests
 import jdatetime
 import pytz
+import html
 from datetime import datetime
 from threading import Thread
 from typing import List, Dict
@@ -146,7 +147,6 @@ def delete_from_db(db_id: int = None, filter_type: str = None):
 
 # ============ JALALI HELPER ============
 def to_jalali(dt: datetime) -> str:
-    """Convert datetime to Iran timezone and Jalali string"""
     iran_tz = pytz.timezone('Asia/Tehran')
     dt_iran = dt.astimezone(iran_tz)
     jd = jdatetime.datetime.fromgregorian(datetime=dt_iran)
@@ -424,10 +424,14 @@ async def support_receive_message(message: Message, state: FSMContext):
 
 # ============ SEND FUNCTIONS ============
 async def send_v2ray(message: Message, item: Dict):
-    text = '\n'.join(line.strip() for line in item["text"].split('\n') if line.strip())
+    # Extract only the config line(s), trim empty lines
+    lines = [line.strip() for line in item["text"].split('\n') if line.strip()]
+    config_text = '\n'.join(lines)
+    # Escape HTML and wrap in <pre> for copy-paste friendly display
+    escaped = html.escape(config_text)
     await message.answer(
-        f"🟢 V2Ray\n📅 {to_jalali(item['date'])}\n\n{text[:1000]}",
-        parse_mode=None,
+        f"🟢 <b>V2Ray</b>\n<pre>{escaped[:1000]}</pre>",
+        parse_mode=ParseMode.HTML,
         disable_web_page_preview=True
     )
 
@@ -442,14 +446,14 @@ async def send_proxy(message: Message, item: Dict):
             break
     if link:
         await message.answer(
-            f"🔵 MTProto\n📅 {to_jalali(item['date'])}\n\n[⚡ کلیک کنید]({link})",
-            parse_mode=ParseMode.MARKDOWN,
+            f"🔵 <b>MTProto</b>\n\n<a href='{html.escape(link)}'>⚡ کلیک کنید</a>",
+            parse_mode=ParseMode.HTML,
             disable_web_page_preview=True
         )
     else:
         await message.answer(
-            f"🔵 پروکسی\n📅 {to_jalali(item['date'])}\n\n{text[:400]}",
-            parse_mode=None,
+            f"🔵 <b>پروکسی</b>\n\n{html.escape(text[:400])}",
+            parse_mode=ParseMode.HTML,
             disable_web_page_preview=True
         )
 
@@ -458,11 +462,11 @@ async def send_nepster(message: Message, item: Dict):
         await bot.send_document(
             chat_id=message.chat.id,
             document=item["file_id"],
-            caption=f"🟣 نپستر\n📅 {to_jalali(item['date'])}\n📄 {item.get('file_name', 'config.npvt')}",
-            parse_mode=None
+            caption=f"🟣 <b>نپستر</b>\n📄 {html.escape(item.get('file_name', 'config.npvt'))}",
+            parse_mode=ParseMode.HTML
         )
     else:
-        await message.answer(f"🟣 نپستر\n📅 {to_jalali(item['date'])}\n\n❌ فایل نیست.", parse_mode=None)
+        await message.answer("🟣 <b>نپستر</b>\n\n❌ فایل در دسترس نیست.", parse_mode=ParseMode.HTML)
 
 # ============ MAIN ============
 async def main():
