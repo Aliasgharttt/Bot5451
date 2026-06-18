@@ -14,6 +14,7 @@ from aiogram.types import (
     Message
 )
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
+from aiogram.client.default import DefaultBotProperties
 from aiohttp import web
 
 # ============ CONFIG ============
@@ -35,7 +36,7 @@ proxy_storage: List[Dict] = []
 last_update_time = None
 
 # ============ BOT SETUP ============
-bot = Bot(token=BOT_TOKEN)
+bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties())
 dp = Dispatcher()
 
 # ============ HEALTH CHECK SERVER ============
@@ -59,56 +60,55 @@ def run_health_server():
 
 # ============ FUNCTIONS ============
 async def fetch_channel_posts():
-    """Fetch posts from channel and update storage"""
+    """Fetch posts from channel using forward method"""
     global proxy_storage, last_update_time
     
     try:
         logger.info(f"🔍 Trying to fetch from channel: {CHANNEL_ID}")
         
-        # First check if bot can access channel
+        # Verify channel access
         try:
-            chat_info = await bot.get_chat(CHANNEL_ID)
-            logger.info(f"✅ Connected to channel: {chat_info.title}")
+            chat = await bot.get_chat(CHANNEL_ID)
+            logger.info(f"✅ Connected to channel: {chat.full_name}")
         except Exception as e:
             logger.error(f"❌ Cannot access channel: {e}")
-            logger.error("Make sure bot is ADMIN of the channel!")
             return
         
+        # Get messages by forwarding them to ourselves
         messages = []
         message_count = 0
         
-        async for message in bot.get_chat_history(CHANNEL_ID, limit=5):
-            message_count += 1
-            logger.info(f"📝 Message {message_count}: {message.text[:100] if message.text else 'No text'}")
-            
-            if message.text and message.date:
-                # Check if within 24 hours
-                age = datetime.now() - message.date
-                logger.info(f"   Age: {age}")
-                
-                if age < timedelta(hours=24):
-                    msg_type = "v2ray" if ("vmess" in message.text.lower() or "vless" in message.text.lower()) else "proxy"
-                    messages.append({
-                        "id": message.message_id,
-                        "text": message.text,
-                        "date": message.date,
-                        "type": msg_type
-                    })
-                    logger.info(f"   ✅ Added as {msg_type}")
-                else:
-                    logger.info(f"   ❌ Too old (>{24}h)")
+        # Simple approach: Get updates from channel
+        updates = await bot.get_updates(limit=10, offset=-1)
         
-        logger.info(f"📊 Total messages found: {message_count}, Valid: {len(messages)}")
+        for update in updates:
+            if update.channel_post:
+                msg = update.channel_post
+                if msg.chat.id == CHANNEL_ID and msg.text:
+                    message_count += 1
+                    age = datetime.now() - msg.date
+                    
+                    if age < timedelta(hours=24):
+                        msg_type = "v2ray" if ("vmess" in msg.text.lower() or "vless" in msg.text.lower()) else "proxy"
+                        messages.append({
+                            "id": msg.message_id,
+                            "text": msg.text,
+                            "date": msg.date,
+                            "type": msg_type
+                        })
+                        logger.info(f"✅ Added {msg_type}: {msg.text[:50]}...")
+        
+        logger.info(f"📊 Total messages: {message_count}, Valid (24h): {len(messages)}")
         
         if messages:
             proxy_storage = messages
             last_update_time = datetime.now()
             logger.info(f"💾 Storage updated with {len(messages)} messages!")
         else:
-            logger.warning("⚠️ No valid messages found!")
+            logger.warning("⚠️ No valid messages in last 24 hours")
             
     except Exception as e:
-        logger.error(f"💥 Error in fetch_channel_posts: {e}")
+        logger.error(f"💥 Error: {e}")
         import traceback
         traceback.print_exc()
 
@@ -118,19 +118,20 @@ async def clean_old_posts():
     before = len(proxy_storage)
     now = datetime.now()
     proxy_storage = [msg for msg in proxy_storage if now - msg["date"] < timedelta(hours=24)]
-    logger.info(f"🧹 Cleaned old posts: {before} -> {len(proxy_storage)}")
+    if before != len(proxy_storage):
+        logger.info(f"🧹 Cleaned: {before} -> {len(proxy_storage)}")
 
 async def periodic_update():
     """Run update every 2 hours"""
-    logger.info("⏰ Periodic update started")
+    logger.info("⏰ Periodic update started (every 2 hours)")
     while True:
         try:
-            logger.info("🔄 Running periodic update...")
+            logger.info("🔄 Running update...")
             await fetch_channel_posts()
             await clean_old_posts()
         except Exception as e:
-            logger.error(f"Periodic update failed: {e}")
-        await asyncio.sleep(7200)  # 2 hours
+            logger.error(f"Update failed: {e}")
+        await asyncio.sleep(7200)
 
 # ============ KEYBOARDS ============
 def get_main_menu():
@@ -159,7 +160,7 @@ def get_inline_keyboard():
 async def cmd_start(message: Message):
     welcome_text = (
         "🚀 **به ربات پروکسی و کانفیگ خوش آمدید!**\n\n"
-        "🔹 این ربات هر ۲ ساعت از کانال مخصوص، پروکسی و کانفیگ‌های جدید دریافت می‌کند.\n"
+        "🔹 این ربات هر ۲ ساعت کانال مخصوص را چک می‌کند.\n"
         "🔸 لینک‌های قدیمی‌تر از ۲۴ ساعت خودکار حذف می‌شوند.\n\n"
         "برای دریافت لینک‌ها از دکمه‌های زیر استفاده کنید 👇"
     )
@@ -178,6 +179,8 @@ async def cmd_start(message: Message):
 
 @dp.message(F.text == "📡 دریافت لینک‌های جدید")
 async def get_new_links(message: Message):
+    # Force update first
+    await fetch_channel_posts()
     await send_proxy_list(message)
 
 @dp.message(F.text == "📋 راهنما")
@@ -185,10 +188,9 @@ async def show_help(message: Message):
     help_text = (
         "📖 **راهنمای ربات:**\n\n"
         "1️⃣ دکمه 'دریافت لینک‌های جدید' را بزنید\n"
-        "2️⃣ ربات آخرین پروکسی‌ها و کانفیگ‌ها را نشان می‌دهد\n"
-        "3️⃣ لینک‌ها هر ۲ ساعت بروز می‌شوند\n"
-        "4️⃣ محتوای قدیمی‌تر از ۲۴ ساعت حذف می‌شود\n\n"
-        "⚠️ برای استفاده از کانفیگ‌ها، آنها را در کلاینت V2Ray خود کپی کنید."
+        "2️⃣ ربات کانال را چک می‌کند و لینک‌ها را نشان می‌دهد\n"
+        "3️⃣ محتوای قدیمی‌تر از ۲۴ ساعت حذف می‌شود\n\n"
+        "⚠️ برای استفاده از کانفیگ‌ها، آنها را در کلاینت خود کپی کنید."
     )
     await message.answer(help_text, parse_mode=ParseMode.MARKDOWN)
 
@@ -202,6 +204,7 @@ async def support(message: Message):
 @dp.callback_query(F.data == "get_all")
 async def inline_get_all(callback: types.CallbackQuery):
     await callback.answer("در حال دریافت...")
+    await fetch_channel_posts()
     await send_proxy_list(callback.message)
 
 @dp.callback_query(F.data == "stats")
@@ -222,39 +225,30 @@ async def inline_stats(callback: types.CallbackQuery):
 
 async def send_proxy_list(message: Message):
     """Send proxy list to user"""
-    logger.info(f"📩 Sending proxy list. Storage size: {len(proxy_storage)}")
+    logger.info(f"📩 Storage size: {len(proxy_storage)}")
     
     if not proxy_storage:
-        logger.warning("⚠️ Storage is empty!")
         await message.answer(
-            "❌ هنوز هیچ لینکی دریافت نشده. لطفاً چند دقیقه دیگر تلاش کنید.\n\n"
-            "🔍 نکات:\n"
-            "• مطمئن شوید ربات ادمین کانال است\n"
-            "• در کانال پیام متنی فرستاده باشید\n"
-            "• پیام‌ها کمتر از ۲۴ ساعت عمر داشته باشند",
+            "❌ هنوز هیچ لینکی دریافت نشده.\n\n"
+            "💡 نکته: یک پیام جدید در کانال بفرستید، سپس دوباره تلاش کنید.",
             reply_markup=get_main_menu()
         )
         return
     
-    await message.answer("📡 **در حال دریافت لینک‌ها...**", parse_mode=ParseMode.MARKDOWN)
+    await message.answer(f"📡 **{len(proxy_storage)} لینک پیدا شد:**\n", parse_mode=ParseMode.MARKDOWN)
     
     for msg in proxy_storage:
         try:
-            if msg["type"] == "v2ray":
-                await message.answer(
-                    f"🟢 **کانفیگ V2Ray:**\n\n`{msg['text'][:200]}`\n\n📅 {msg['date'].strftime('%Y-%m-%d %H:%M')}",
-                    parse_mode=ParseMode.MARKDOWN
-                )
-            else:
-                await message.answer(
-                    f"🔵 **پروکسی:**\n\n`{msg['text'][:200]}`\n\n📅 {msg['date'].strftime('%Y-%m-%d %H:%M')}",
-                    parse_mode=ParseMode.MARKDOWN
-                )
+            prefix = "🟢 **V2Ray**" if msg["type"] == "v2ray" else "🔵 **پروکسی**"
+            await message.answer(
+                f"{prefix}\n📅 {msg['date'].strftime('%Y-%m-%d %H:%M')}\n\n`{msg['text'][:500]}`",
+                parse_mode=ParseMode.MARKDOWN
+            )
         except Exception as e:
-            logger.error(f"Failed to send message: {e}")
+            logger.error(f"Failed to send: {e}")
     
     await message.answer(
-        f"✅ **{len(proxy_storage)} لینک دریافت شد!**\nبرای بروزرسانی مجدد، دوباره کلیک کنید.",
+        "✅ برای بروزرسانی مجدد، دوباره کلیک کنید.",
         reply_markup=get_main_menu()
     )
 
@@ -262,18 +256,13 @@ async def send_proxy_list(message: Message):
 async def main():
     logger.info("🚀 Starting bot...")
     
-    # Start health check server in separate thread
     health_thread = Thread(target=run_health_server, daemon=True)
     health_thread.start()
     
-    # Initial fetch
     await fetch_channel_posts()
-    
-    # Start periodic update task
     asyncio.create_task(periodic_update())
     
-    # Start bot
-    logger.info("✅ Bot started successfully!")
+    logger.info("✅ Bot started!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
