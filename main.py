@@ -24,16 +24,20 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 PORT = int(os.getenv("PORT", 8080))
+ADMIN_ID = os.getenv("ADMIN_ID", "0")  # Your Telegram ID (optional)
 
 if not BOT_TOKEN or not CHANNEL_ID:
-    raise ValueError("BOT_TOKEN and CHANNEL_ID must be set in environment variables")
+    raise ValueError("BOT_TOKEN and CHANNEL_ID must be set")
 
 CHANNEL_ID = int(CHANNEL_ID)
-logger.info(f"Bot starting with Channel ID: {CHANNEL_ID}")
+ADMIN_ID = int(ADMIN_ID) if ADMIN_ID != "0" else None
+
+logger.info(f"Starting with Channel: {CHANNEL_ID}")
 
 # ============ STORAGE ============
 proxy_storage: List[Dict] = []
 last_update_time = None
+last_message_id = 0  # Track last seen message
 
 # ============ BOT SETUP ============
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties())
@@ -50,7 +54,7 @@ async def start_health_server():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
-    logger.info(f"Health check server started on port {PORT}")
+    logger.info(f"Health server on port {PORT}")
 
 def run_health_server():
     loop = asyncio.new_event_loop()
@@ -60,82 +64,118 @@ def run_health_server():
 
 # ============ FUNCTIONS ============
 async def fetch_channel_posts():
-    """Fetch posts from channel using forward method"""
-    global proxy_storage, last_update_time
+    """Fetch posts by copying messages to a private chat"""
+    global proxy_storage, last_update_time, last_message_id
     
     try:
-        logger.info(f"🔍 Trying to fetch from channel: {CHANNEL_ID}")
+        logger.info("🔍 Fetching channel posts...")
         
-        # Verify channel access
-        try:
-            chat = await bot.get_chat(CHANNEL_ID)
-            logger.info(f"✅ Connected to channel: {chat.full_name}")
-        except Exception as e:
-            logger.error(f"❌ Cannot access channel: {e}")
+        if not ADMIN_ID:
+            logger.error("❌ ADMIN_ID not set! Can't fetch messages.")
+            logger.error("Add ADMIN_ID (your Telegram ID) to Railway variables")
             return
         
-        # Get messages by forwarding them to ourselves
+        # Get latest message ID from channel
+        chat = await bot.get_chat(CHANNEL_ID)
+        logger.info(f"✅ Channel: {chat.full_name}")
+        
+        # Forward messages from channel to admin (to get the content)
         messages = []
-        message_count = 0
         
-        # Simple approach: Get updates from channel
-        updates = await bot.get_updates(limit=10, offset=-1)
-        
-        for update in updates:
-            if update.channel_post:
-                msg = update.channel_post
-                if msg.chat.id == CHANNEL_ID and msg.text:
-                    message_count += 1
-                    age = datetime.now() - msg.date
-                    
+        # Try to forward last 5 messages
+        for offset in range(5):
+            try:
+                msg_id = chat.pinned_message.message_id - offset if chat.pinned_message else 0
+                if msg_id <= 0:
+                    # Try forwarding by known IDs
+                    if last_message_id > 0:
+                        msg_id = last_message_id - offset
+                    else:
+                        continue
+                
+                # Forward message to admin
+                forwarded = await bot.forward_message(
+                    chat_id=ADMIN_ID,
+                    from_chat_id=CHANNEL_ID,
+                    message_id=msg_id
+                )
+                
+                if forwarded.text:
+                    age = datetime.now() - forwarded.date
                     if age < timedelta(hours=24):
-                        msg_type = "v2ray" if ("vmess" in msg.text.lower() or "vless" in msg.text.lower()) else "proxy"
+                        msg_type = "v2ray" if ("vmess" in forwarded.text.lower() or "vless" in forwarded.text.lower()) else "proxy"
                         messages.append({
-                            "id": msg.message_id,
-                            "text": msg.text,
-                            "date": msg.date,
+                            "id": forwarded.message_id,
+                            "text": forwarded.text,
+                            "date": forwarded.date,
                             "type": msg_type
                         })
-                        logger.info(f"✅ Added {msg_type}: {msg.text[:50]}...")
-        
-        logger.info(f"📊 Total messages: {message_count}, Valid (24h): {len(messages)}")
+                        logger.info(f"✅ Found: {msg_type}")
+                
+                # Delete forwarded message from admin chat
+                await bot.delete_message(ADMIN_ID, forwarded.message_id)
+                
+            except Exception as e:
+                logger.debug(f"Skip msg {offset}: {e}")
+                continue
         
         if messages:
             proxy_storage = messages
             last_update_time = datetime.now()
-            logger.info(f"💾 Storage updated with {len(messages)} messages!")
+            logger.info(f"💾 Storage: {len(messages)} messages")
         else:
-            logger.warning("⚠️ No valid messages in last 24 hours")
+            logger.warning("⚠️ No messages found")
             
     except Exception as e:
         logger.error(f"💥 Error: {e}")
-        import traceback
-        traceback.print_exc()
 
 async def clean_old_posts():
-    """Remove posts older than 24 hours"""
     global proxy_storage
     before = len(proxy_storage)
     now = datetime.now()
-    proxy_storage = [msg for msg in proxy_storage if now - msg["date"] < timedelta(hours=24)]
+    proxy_storage = [m for m in proxy_storage if now - m["date"] < timedelta(hours=24)]
     if before != len(proxy_storage):
         logger.info(f"🧹 Cleaned: {before} -> {len(proxy_storage)}")
 
 async def periodic_update():
-    """Run update every 2 hours"""
-    logger.info("⏰ Periodic update started (every 2 hours)")
+    logger.info("⏰ Periodic update started")
     while True:
         try:
-            logger.info("🔄 Running update...")
             await fetch_channel_posts()
             await clean_old_posts()
         except Exception as e:
-            logger.error(f"Update failed: {e}")
+            logger.error(f"Update error: {e}")
         await asyncio.sleep(7200)
+
+# ============ HANDLER FOR RECEIVING FORWARDED MESSAGES ============
+@dp.message(F.forward_from_chat)
+async def handle_forwarded(message: Message):
+    """This catches forwarded messages from channel"""
+    global proxy_storage, last_update_time, last_message_id
+    
+    if message.forward_from_chat.id == CHANNEL_ID:
+        logger.info(f"📨 Received forwarded message from channel")
+        
+        if message.text:
+            msg_type = "v2ray" if ("vmess" in message.text.lower() or "vless" in message.text.lower()) else "proxy"
+            
+            proxy_storage.append({
+                "id": message.message_id,
+                "text": message.text,
+                "date": message.date,
+                "type": msg_type
+            })
+            
+            last_message_id = message.forward_from_message_id
+            last_update_time = datetime.now()
+            
+            logger.info(f"✅ Added {msg_type} to storage")
+            
+            # Clean old
+            await clean_old_posts()
 
 # ============ KEYBOARDS ============
 def get_main_menu():
-    """Main menu with colored ReplyKeyboard"""
     builder = ReplyKeyboardBuilder()
     builder.row(
         KeyboardButton(text="📡 دریافت لینک‌های جدید", style=ButtonStyle.SUCCESS)
@@ -147,7 +187,6 @@ def get_main_menu():
     return builder.as_markup(resize_keyboard=True)
 
 def get_inline_keyboard():
-    """Inline keyboard"""
     builder = InlineKeyboardBuilder()
     builder.row(
         InlineKeyboardButton(text="🔵 دریافت پروکسی و کانفیگ", callback_data="get_all"),
@@ -158,111 +197,89 @@ def get_inline_keyboard():
 # ============ HANDLERS ============
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
-    welcome_text = (
-        "🚀 **به ربات پروکسی و کانفیگ خوش آمدید!**\n\n"
-        "🔹 این ربات هر ۲ ساعت کانال مخصوص را چک می‌کند.\n"
-        "🔸 لینک‌های قدیمی‌تر از ۲۴ ساعت خودکار حذف می‌شوند.\n\n"
-        "برای دریافت لینک‌ها از دکمه‌های زیر استفاده کنید 👇"
-    )
-    
     await message.answer(
-        welcome_text,
+        "🚀 **به ربات پروکسی و کانفیگ خوش آمدید!**\n\n"
+        "برای دریافت لینک‌ها از دکمه‌های زیر استفاده کنید 👇",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=get_main_menu()
     )
-    
     await message.answer(
         "⚡ **دسترسی سریع:**",
-        parse_mode=ParseMode.MARKDOWN,
         reply_markup=get_inline_keyboard()
     )
 
+@dp.message(Command("forward"))
+async def cmd_forward(message: Message):
+    """Manual command to forward latest messages from channel"""
+    await message.answer("🔄 در حال دریافت پیام‌ها از کانال...")
+    await fetch_channel_posts()
+    await send_proxy_list(message)
+
 @dp.message(F.text == "📡 دریافت لینک‌های جدید")
 async def get_new_links(message: Message):
-    # Force update first
-    await fetch_channel_posts()
     await send_proxy_list(message)
 
 @dp.message(F.text == "📋 راهنما")
 async def show_help(message: Message):
-    help_text = (
-        "📖 **راهنمای ربات:**\n\n"
-        "1️⃣ دکمه 'دریافت لینک‌های جدید' را بزنید\n"
-        "2️⃣ ربات کانال را چک می‌کند و لینک‌ها را نشان می‌دهد\n"
-        "3️⃣ محتوای قدیمی‌تر از ۲۴ ساعت حذف می‌شود\n\n"
-        "⚠️ برای استفاده از کانفیگ‌ها، آنها را در کلاینت خود کپی کنید."
+    await message.answer(
+        "📖 **راهنما:**\n\n"
+        "• پیام‌های کانال را به ربات Forward کنید\n"
+        "• یا از دستور /forward استفاده کنید\n"
+        "• ربات خودکار لینک‌ها را ذخیره می‌کند",
+        parse_mode=ParseMode.MARKDOWN
     )
-    await message.answer(help_text, parse_mode=ParseMode.MARKDOWN)
 
 @dp.message(F.text == "💬 پشتیبانی")
 async def support(message: Message):
-    await message.answer(
-        "📨 برای پشتیبانی به آیدی زیر پیام دهید:\n@YourUsername",
-        parse_mode=ParseMode.MARKDOWN
-    )
+    await message.answer("📨 @YourUsername")
 
 @dp.callback_query(F.data == "get_all")
 async def inline_get_all(callback: types.CallbackQuery):
     await callback.answer("در حال دریافت...")
-    await fetch_channel_posts()
     await send_proxy_list(callback.message)
 
 @dp.callback_query(F.data == "stats")
 async def inline_stats(callback: types.CallbackQuery):
     await callback.answer()
+    v2ray_count = sum(1 for m in proxy_storage if m["type"] == "v2ray")
+    proxy_count = sum(1 for m in proxy_storage if m["type"] == "proxy")
     
-    v2ray_count = sum(1 for msg in proxy_storage if msg["type"] == "v2ray")
-    proxy_count = sum(1 for msg in proxy_storage if msg["type"] == "proxy")
-    
-    stats_text = (
-        "📊 **آمار امروز:**\n\n"
-        f"🟢 کانفیگ V2Ray: {v2ray_count} عدد\n"
-        f"🔵 پروکسی: {proxy_count} عدد\n"
-        f"📅 آخرین بروزرسانی: {last_update_time.strftime('%H:%M:%S') if last_update_time else 'نامشخص'}"
+    await callback.message.answer(
+        f"📊 **آمار:**\n\n"
+        f"🟢 V2Ray: {v2ray_count}\n"
+        f"🔵 پروکسی: {proxy_count}\n"
+        f"🕐 بروزرسانی: {last_update_time.strftime('%H:%M') if last_update_time else 'ندارد'}",
+        parse_mode=ParseMode.MARKDOWN
     )
-    
-    await callback.message.answer(stats_text, parse_mode=ParseMode.MARKDOWN)
 
 async def send_proxy_list(message: Message):
-    """Send proxy list to user"""
-    logger.info(f"📩 Storage size: {len(proxy_storage)}")
-    
     if not proxy_storage:
         await message.answer(
-            "❌ هنوز هیچ لینکی دریافت نشده.\n\n"
-            "💡 نکته: یک پیام جدید در کانال بفرستید، سپس دوباره تلاش کنید.",
+            "❌ هنوز لینکی ذخیره نشده.\n\n"
+            "📌 **دو روش برای اضافه کردن:**\n"
+            "1️⃣ پیام‌های کانال را Forward کنید به ربات\n"
+            "2️⃣ دستور /forward را بزنید",
             reply_markup=get_main_menu()
         )
         return
     
-    await message.answer(f"📡 **{len(proxy_storage)} لینک پیدا شد:**\n", parse_mode=ParseMode.MARKDOWN)
+    for msg in proxy_storage[-5:]:  # Last 5 messages
+        prefix = "🟢 V2Ray" if msg["type"] == "v2ray" else "🔵 پروکسی"
+        await message.answer(
+            f"{prefix}\n📅 {msg['date'].strftime('%Y-%m-%d %H:%M')}\n\n`{msg['text'][:400]}`",
+            parse_mode=ParseMode.MARKDOWN
+        )
     
-    for msg in proxy_storage:
-        try:
-            prefix = "🟢 **V2Ray**" if msg["type"] == "v2ray" else "🔵 **پروکسی**"
-            await message.answer(
-                f"{prefix}\n📅 {msg['date'].strftime('%Y-%m-%d %H:%M')}\n\n`{msg['text'][:500]}`",
-                parse_mode=ParseMode.MARKDOWN
-            )
-        except Exception as e:
-            logger.error(f"Failed to send: {e}")
-    
-    await message.answer(
-        "✅ برای بروزرسانی مجدد، دوباره کلیک کنید.",
-        reply_markup=get_main_menu()
-    )
+    await message.answer("✅", reply_markup=get_main_menu())
 
 # ============ MAIN ============
 async def main():
-    logger.info("🚀 Starting bot...")
+    logger.info("🚀 Starting...")
     
-    health_thread = Thread(target=run_health_server, daemon=True)
-    health_thread.start()
-    
-    await fetch_channel_posts()
+    Thread(target=run_health_server, daemon=True).start()
     asyncio.create_task(periodic_update())
     
-    logger.info("✅ Bot started!")
+    logger.info("✅ Ready!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
