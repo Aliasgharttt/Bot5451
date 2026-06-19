@@ -3,17 +3,13 @@ import logging
 import os
 import random
 import re
-import json
-import requests
-import jdatetime
-import pytz
 import html
 import string
 import tempfile
+import requests
+import jdatetime
+import pytz
 from datetime import datetime, timezone
-from threading import Thread
-from typing import List, Dict
-
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.enums import ParseMode, ButtonStyle
 from aiogram.filters import Command
@@ -25,7 +21,6 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiohttp import web
 
-# ============ CONFIG ============
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -33,524 +28,264 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "0"))
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 PORT = int(os.getenv("PORT", "8080"))
-DB_URL = os.getenv("DB_URL")
+DB_URL = (os.getenv("DB_URL") or "").replace("libsql://", "https://")
 DB_TOKEN = os.getenv("DB_TOKEN")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")
 
-if DB_URL and DB_URL.startswith("libsql://"):
-    DB_URL = DB_URL.replace("libsql://", "https://")
-
-# ============ BOT SETUP ============
 bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties())
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
-# ============ FSM ============
 class SupportState(StatesGroup):
     waiting_for_message = State()
 
 # ============ DATABASE ============
-def db_query(sql: str, params: List = None):
+def db_query(sql: str, params: list = None):
     try:
-        url = f"{DB_URL}"
-        headers = {
-            "Authorization": f"Bearer {DB_TOKEN}",
-            "Content-Type": "application/json"
-        }
-        data = {
-            "statements": [
-                {"q": sql, "params": params or []}
-            ]
-        }
-        response = requests.post(url, headers=headers, json=data, timeout=10)
+        headers = {"Authorization": f"Bearer {DB_TOKEN}", "Content-Type": "application/json"}
+        data = {"statements": [{"q": sql, "params": params or []}]}
+        response = requests.post(DB_URL, headers=headers, json=data, timeout=10)
         result = response.json()
         if isinstance(result, list) and len(result) > 0:
-            first = result[0]
-            if "results" in first:
-                return first["results"]
-            elif "error" in first:
-                logger.error(f"❌ DB error: {first['error']}")
+            if "results" in result[0]: return result[0]["results"]
+            if "error" in result[0]: logger.error(f"❌ DB error: {result[0]['error']}")
         return None
     except Exception as e:
-        logger.error(f"❌ DB error: {e}")
+        logger.error(f"❌ DB connection error: {e}")
         return None
 
 def init_database():
-    try:
-        db_query("""
-            CREATE TABLE IF NOT EXISTS configs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                message_id INTEGER,
-                text TEXT,
-                date TEXT,
-                type TEXT,
-                file_id TEXT,
-                file_name TEXT
-            )
-        """)
-        # جدول آمار کاربران
-        db_query("""
-            CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
-                full_name TEXT,
-                username TEXT,
-                join_date TEXT
-            )
-        """)
-        logger.info("✅ Database initialized")
-    except Exception as e:
-        logger.error(f"❌ Database init error: {e}")
+    db_query("CREATE TABLE IF NOT EXISTS configs (id INTEGER PRIMARY KEY AUTOINCREMENT, message_id INTEGER, text TEXT, date TEXT, type TEXT, file_id TEXT, file_name TEXT)")
+    db_query("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, full_name TEXT, username TEXT, join_date TEXT)")
+    logger.info("✅ Database initialized")
 
-def save_to_db(item: Dict):
-    try:
-        db_query("""
-            INSERT INTO configs (message_id, text, date, type, file_id, file_name)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, [
-            item["id"], item["text"],
-            item["date"].strftime('%Y-%m-%d %H:%M:%S'),
-            item["type"],
-            item.get("file_id", ""),
-            item.get("file_name", "")
-        ])
-        logger.info(f"💾 Saved: {item['type']}")
-    except Exception as e:
-        logger.error(f"❌ DB save error: {e}")
+def save_to_db(item: dict):
+    db_query("INSERT INTO configs (message_id, text, date, type, file_id, file_name) VALUES (?, ?, ?, ?, ?, ?)",
+             [item["id"], item["text"], item["date"].strftime('%Y-%m-%d %H:%M:%S'), item["type"], item.get("file_id", ""), item.get("file_name", "")])
 
-def get_from_db(filter_type: str = "all") -> List[Dict]:
-    try:
-        if filter_type == "all":
-            sql = "SELECT * FROM configs ORDER BY id"
-            params = []
-        else:
-            sql = "SELECT * FROM configs WHERE type = ? ORDER BY id"
-            params = [filter_type]
-        result = db_query(sql, params)
-        items = []
-        if result and "rows" in result:
-            for row in result["rows"]:
-                items.append({
-                    "db_id": row[0],
-                    "id": row[1],
-                    "text": row[2],
-                    "date": datetime.strptime(row[3], '%Y-%m-%d %H:%M:%S'),
-                    "type": row[4],
-                    "file_id": row[5] if row[5] else None,
-                    "file_name": row[6] if row[6] else None
-                })
-        return items
-    except Exception as e:
-        logger.error(f"❌ DB fetch error: {e}")
-        return []
+def get_from_db(filter_type: str = "all") -> list:
+    sql = "SELECT * FROM configs ORDER BY id" if filter_type == "all" else "SELECT * FROM configs WHERE type = ? ORDER BY id"
+    res = db_query(sql, [] if filter_type == "all" else [filter_type])
+    items = []
+    if res and "rows" in res:
+        for r in res["rows"]:
+            items.append({"db_id": r[0], "id": r[1], "text": r[2], "date": datetime.strptime(r[3], '%Y-%m-%d %H:%M:%S'), "type": r[4], "file_id": r[5] or None, "file_name": r[6] or None})
+    return items
 
 def delete_from_db(db_id: int = None, filter_type: str = None):
-    try:
-        if filter_type == "all":
-            db_query("DELETE FROM configs")
-        elif db_id:
-            db_query("DELETE FROM configs WHERE id = ?", [db_id])
-        elif filter_type:
-            db_query("DELETE FROM configs WHERE type = ?", [filter_type])
-    except Exception as e:
-        logger.error(f"❌ DB delete error: {e}")
+    if filter_type == "all": db_query("DELETE FROM configs")
+    elif db_id: db_query("DELETE FROM configs WHERE id = ?", [db_id])
+    elif filter_type: db_query("DELETE FROM configs WHERE type = ?", [filter_type])
 
-# ============ USER STATS DB ============
 def save_user(user_id: int, full_name: str, username: str, join_date: datetime):
-    try:
-        existing = db_query("SELECT user_id FROM users WHERE user_id = ?", [user_id])
-        if not existing or "rows" not in existing or len(existing["rows"]) == 0:
-            db_query("""
-                INSERT INTO users (user_id, full_name, username, join_date)
-                VALUES (?, ?, ?, ?)
-            """, [user_id, full_name, username, join_date.strftime('%Y-%m-%d %H:%M:%S')])
-    except Exception as e:
-        logger.error(f"❌ DB save_user error: {e}")
+    exist = db_query("SELECT user_id FROM users WHERE user_id = ?", [user_id])
+    if not exist or "rows" not in exist or len(exist["rows"]) == 0:
+        db_query("INSERT INTO users (user_id, full_name, username, join_date) VALUES (?, ?, ?, ?)", [user_id, full_name, username, join_date.strftime('%Y-%m-%d %H:%M:%S')])
 
 def get_users_count() -> int:
-    try:
-        res = db_query("SELECT COUNT(*) FROM users")
-        if res and "rows" in res and res["rows"]:
-            return res["rows"][0][0]
-    except Exception as e:
-        logger.error(f"❌ DB get_users_count error: {e}")
-    return 0
+    res = db_query("SELECT COUNT(*) FROM users")
+    return res["rows"][0][0] if res and "rows" in res and res["rows"] else 0
 
-def get_all_users() -> List[Dict]:
-    try:
-        res = db_query("SELECT user_id, full_name, username, join_date FROM users ORDER BY join_date DESC")
-        users = []
-        if res and "rows" in res:
-            for row in res["rows"]:
-                dt = datetime.strptime(row[3], '%Y-%m-%d %H:%M:%S')
-                dt = dt.replace(tzinfo=timezone.utc)
-                users.append({
-                    "user_id": row[0],
-                    "full_name": row[1] or "",
-                    "username": row[2] or "",
-                    "join_date": dt
-                })
-        return users
-    except Exception as e:
-        logger.error(f"❌ DB get_all_users error: {e}")
-        return []
+def get_all_users() -> list:
+    res = db_query("SELECT user_id, full_name, username, join_date FROM users ORDER BY join_date DESC")
+    users = []
+    if res and "rows" in res:
+        for r in res["rows"]:
+            dt = datetime.strptime(r[3], '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
+            users.append({"user_id": r[0], "full_name": r[1] or "", "username": r[2] or "", "join_date": dt})
+    return users
 
-# ============ JALALI HELPER ============
+# ============ HELPERS ============
 def to_jalali(dt: datetime) -> str:
-    iran_tz = pytz.timezone('Asia/Tehran')
-    dt_iran = dt.astimezone(iran_tz)
-    jd = jdatetime.datetime.fromgregorian(datetime=dt_iran)
-    return jd.strftime('%Y/%m/%d %H:%M')
+    dt_iran = dt.astimezone(pytz.timezone('Asia/Tehran'))
+    return jdatetime.datetime.fromgregorian(datetime=dt_iran).strftime('%Y/%m/%d %H:%M')
 
-def random_name(length=6):
-    chars = string.ascii_letters + string.digits
-    return ''.join(random.choices(chars, k=length)) + ".npvt"
+def random_name():
+    return ''.join(random.choices(string.ascii_letters + string.digits, k=6)) + ".npvt"
 
-# ============ HEALTH CHECK ============
 async def health_check(request):
     return web.Response(text="OK")
-
-# ============ DETECTION ============
-def detect_type(text: str) -> str:
-    text_lower = text.lower()
-    for protocol in ['vmess://', 'vless://', 'trojan://', 'hysteria2://', 'hysteria://', 'tuic://', 'ss://', 'ssr://', 'shadowrocket://']:
-        if protocol in text_lower:
-            return "v2ray"
-    return "proxy"
-
-def is_npvt_file(file_name: str = None) -> bool:
-    return file_name and file_name.lower().endswith('.npvt')
 
 # ============ CHANNEL POST HANDLER ============
 @dp.channel_post()
 async def handle_channel_post(message: Message):
-    if message.chat.id != CHANNEL_ID:
+    if message.chat.id != CHANNEL_ID: return
+    if message.document and (message.document.file_name or "").lower().endswith('.npvt'):
+        save_to_db({"id": message.message_id, "text": message.caption or "🟣 نپستر کانفیگ", "date": message.date, "type": "nepster", "file_id": message.document.file_id, "file_name": random_name()})
         return
-    
-    if message.document:
-        file_name = message.document.file_name or ""
-        if is_npvt_file(file_name):
-            save_to_db({
-                "id": message.message_id,
-                "text": message.caption or "🟣 نپستر کانفیگ",
-                "date": message.date,
-                "type": "nepster",
-                "file_id": message.document.file_id,
-                "file_name": random_name()
-            })
-            return
-    
     text = message.text or message.caption or ""
     entities = message.entities or message.caption_entities or []
+    if not text and not entities: return
     
-    if not text and not entities:
-        return
+    links = []
+    is_v2ray = lambda u: any(u.startswith(p) for p in ['vmess://', 'vless://', 'trojan://', 'hysteria2://', 'hysteria://', 'tuic://', 'ss://', 'ssr://', 'shadowrocket://'])
+    is_proxy = lambda u: 't.me/proxy' in u or 'tg://proxy' in u
     
-    def is_proxy_url(url: str) -> bool:
-        return 't.me/proxy' in url or 'tg://proxy' in url
+    for e in entities:
+        url = e.url if e.type == 'text_link' else text[e.offset:e.offset + e.length]
+        if url and (is_proxy(url) or is_v2ray(url)): links.append(url)
+        
+    if not links: links.extend(re.findall(r'(?:https?://t\.me/proxy|tg://proxy)\S+', text))
+    if not links: links.extend(re.findall(r'(?:vmess|vless|trojan|hysteria2?|tuic|ss|ssr|shadowrocket)://\S+', text))
     
-    def is_v2ray_url(url: str) -> bool:
-        return any(url.startswith(p) for p in [
-            'vmess://', 'vless://', 'trojan://', 'hysteria2://', 'hysteria://',
-            'tuic://', 'ss://', 'ssr://', 'shadowrocket://'
-        ])
-    
-    proxy_links = []
-    v2ray_links = []
-    
-    for entity in entities:
-        if entity.type == 'text_link':
-            url = entity.url
-            if is_proxy_url(url):
-                proxy_links.append(url)
-            elif is_v2ray_url(url):
-                v2ray_links.append(url)
-        elif entity.type == 'url':
-            url = text[entity.offset:entity.offset + entity.length]
-            if is_proxy_url(url):
-                proxy_links.append(url)
-            elif is_v2ray_url(url):
-                v2ray_links.append(url)
-    
-    if not proxy_links:
-        proxy_links = re.findall(r'(?:https?://t\.me/proxy|tg://proxy)\S+', text)
-    
-    if not v2ray_links:
-        v2ray_links = re.findall(
-            r'(?:vmess|vless|trojan|hysteria2?|tuic|ss|ssr|shadowrocket)://\S+',
-            text
-        )
-    
-    if proxy_links:
-        for link in proxy_links:
-            save_to_db({
-                "id": message.message_id,
-                "text": link,
-                "date": message.date,
-                "type": "proxy",
-                "file_id": None,
-                "file_name": ""
-            })
-        return
-    
-    if v2ray_links:
-        for link in v2ray_links:
-            save_to_db({
-                "id": message.message_id,
-                "text": link,
-                "date": message.date,
-                "type": "v2ray",
-                "file_id": None,
-                "file_name": ""
-            })
-        return
-
-# ============ KEYBOARDS ============
-def get_main_menu():
-    builder = ReplyKeyboardBuilder()
-    builder.row(
-        KeyboardButton(text="V2Ray", style=ButtonStyle.SUCCESS),
-        KeyboardButton(text="Proxy", style=ButtonStyle.SUCCESS)
-    )
-    builder.row(
-        KeyboardButton(text="NPT (NapsternetV)", style=ButtonStyle.SUCCESS)
-    )
-    builder.row(
-        KeyboardButton(text="Support", style=ButtonStyle.PRIMARY)
-    )
-    return builder.as_markup(resize_keyboard=True)
+    for link in links:
+        save_to_db({"id": message.message_id, "text": link, "date": message.date, "type": "v2ray" if is_v2ray(link) else "proxy"})
 
 # ============ HANDLERS ============
+def get_main_menu():
+    b = ReplyKeyboardBuilder()
+    b.row(KeyboardButton(text="V2Ray"), KeyboardButton(text="Proxy"))
+    b.row(KeyboardButton(text="NPT (NapsternetV)"))
+    b.row(KeyboardButton(text="Support"))
+    return b.as_markup(resize_keyboard=True)
+
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
-    user = message.from_user
-    user_link = "[" + user.full_name + "](tg://user?id=" + str(user.id) + ")"
-    
-    save_user(
-        user_id=user.id,
-        full_name=user.full_name or "",
-        username=user.username or "",
-        join_date=message.date
-    )
-
-    await message.answer(
-        "سلام " + user_link + " 👋 خوش آمدید!",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=get_main_menu()
-    )
+    u = message.from_user
+    save_user(u.id, u.full_name or "", u.username or "", message.date)
+    await message.answer(f"سلام [{u.full_name}](tg://user?id={u.id}) 👋 خوش آمدید!", parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_menu())
 
 @dp.message(F.text == "V2Ray")
 async def get_v2ray(message: Message):
     items = get_from_db("v2ray")
-    if not items:
-        await message.answer("❌ V2Ray یافت نشد.", reply_markup=get_main_menu())
-        return
-    item = random.choice(items)
-    await send_v2ray(message, item)
+    if not items: return await message.answer("❌ V2Ray یافت نشد.")
+    txt = '\n'.join([l.strip() for l in random.choice(items)["text"].split('\n') if l.strip()])
+    await message.answer(f"🟢 <b>V2Ray</b>\n<pre>{html.escape(txt[:1000])}</pre>", parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
 @dp.message(F.text == "Proxy")
 async def get_proxy(message: Message):
     items = get_from_db("proxy")
-    if not items:
-        await message.answer("❌ پروکسی یافت نشد.", reply_markup=get_main_menu())
-        return
-    count = min(3, len(items))
-    selected = random.sample(items, count)
-    await message.answer("🔵 **" + str(count) + " پروکسی رندوم:**", parse_mode=ParseMode.MARKDOWN)
-    for item in selected:
-        await send_proxy(message, item)
-    await message.answer("✅", reply_markup=get_main_menu())
+    if not items: return await message.answer("❌ پروکسی یافت نشد.")
+    sel = random.sample(items, min(3, len(items)))
+    await message.answer(f"🔵 **{len(sel)} پروکسی رندوم:**", parse_mode=ParseMode.MARKDOWN)
+    for it in sel:
+        lnk = next((u for u in re.findall(r'https?://t\.me/proxy\S+', it["text"])), None)
+        if lnk: await message.answer(f"🔵 <b>MTProto</b>\n\n<a href='{html.escape(lnk)}'>⚡ کلیک کنید</a>", parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+        else: await message.answer(f"🔵 <b>پروکسی</b>\n\n{html.escape(it['text'][:400])}", parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
 @dp.message(F.text == "NPT (NapsternetV)")
 async def get_nepster(message: Message):
     items = get_from_db("nepster")
-    if not items:
-        await message.answer("❌ نپستر یافت نشد.", reply_markup=get_main_menu())
-        return
-    item = random.choice(items)
-    await send_nepster(message, item)
+    if not items: return await message.answer("❌ نپستر یافت نشد.")
+    it = random.choice(items)
+    if it.get("file_id"):
+        try:
+            fd = await bot.download(it["file_id"])
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".npvt") as tmp:
+                tmp.write(fd.read())
+                p = tmp.name
+            await bot.send_document(message.chat.id, FSInputFile(p, filename=it['file_name']), caption=f"🟣 <b>نپستر</b>\n📄 {html.escape(it['file_name'])}", parse_mode=ParseMode.HTML)
+            os.remove(p)
+        except Exception: await message.answer("❌ خطا در ارسال فایل.")
+    else: await message.answer("❌ فایل در دسترس نیست.")
 
 # ============ MANAGE PANEL ============
+def get_manage_kb():
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="👥 آمار کاربران", callback_data="stats_users"))
+    kb.row(InlineKeyboardButton(text="🗑 حذف همه V2Ray", callback_data="del_v2ray"), InlineKeyboardButton(text="🗑 حذف همه پروکسی", callback_data="del_proxy"))
+    kb.row(InlineKeyboardButton(text="🗑 حذف همه نپستر", callback_data="del_nepster"), InlineKeyboardButton(text="💣 حذف همه چیز", callback_data="del_all"))
+    kb.row(InlineKeyboardButton(text="❌ خروج", callback_data="manage_exit"))
+    return kb.as_markup()
+
 @dp.message(Command("manage"))
 async def cmd_manage(message: Message, state: FSMContext):
-    if message.from_user.id != ADMIN_ID:
-        return
+    if message.from_user.id != ADMIN_ID: return
     await state.clear()
-    
-    v2ray_count = len(get_from_db("v2ray"))
-    proxy_count = len(get_from_db("proxy"))
-    nepster_count = len(get_from_db("nepster"))
-    total = v2ray_count + proxy_count + nepster_count
-    
-    txt = "🛠 **پنل مدیریت**\n\n🟢 V2Ray: " + str(v2ray_count) + " عدد\n🔵 پروکسی: " + str(proxy_count) + " عدد\n🟣 نپستر: " + str(nepster_count) + " عدد\n📊 کل: " + str(total)
-    
-    kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="👥 آمار کاربران", callback_data="stats_users"))
-    kb.row(InlineKeyboardButton(text="🗑 حذف همه V2Ray", callback_data="del_v2ray"))
-    kb.row(InlineKeyboardButton(text="🗑 حذف همه پروکسی", callback_data="del_proxy"))
-    kb.row(InlineKeyboardButton(text="🗑 حذف همه نپستر", callback_data="del_nepster"))
-    kb.row(InlineKeyboardButton(text="💣 حذف همه چیز", callback_data="del_all"))
-    kb.row(InlineKeyboardButton(text="❌ خروج", callback_data="manage_exit"))
-    
-    await message.answer(txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb.as_markup())
+    t = f"🛠 **پنل مدیریت**\n\n🟢 V2Ray: {len(get_from_db('v2ray'))}\n🔵 پروکسی: {len(get_from_db('proxy'))}\n🟣 نپستر: {len(get_from_db('nepster'))}\n📊 کل: {len(get_from_db('all'))}"
+    await message.answer(t, parse_mode=ParseMode.MARKDOWN, reply_markup=get_manage_kb())
 
 @dp.callback_query(F.data == "manage_back")
-async def manage_back(callback: types.CallbackQuery):
-    if callback.from_user.id != ADMIN_ID:
-        return
-    
-    v2ray_count = len(get_from_db("v2ray"))
-    proxy_count = len(get_from_db("proxy"))
-    nepster_count = len(get_from_db("nepster"))
-    total = v2ray_count + proxy_count + nepster_count
-    
-    txt = "🛠 **پنل مدیریت**\n\n🟢 V2Ray: " + str(v2ray_count) + " عدد\n🔵 پروکسی: " + str(proxy_count) + " عدد\n🟣 نپستر: " + str(nepster_count) + " عدد\n📊 کل: " + str(total)
-    
-    kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="👥 آمار کاربران", callback_data="stats_users"))
-    kb.row(InlineKeyboardButton(text="🗑 حذف همه V2Ray", callback_data="del_v2ray"))
-    kb.row(InlineKeyboardButton(text="🗑 حذف همه پروکسی", callback_data="del_proxy"))
-    kb.row(InlineKeyboardButton(text="🗑 حذف همه نپستر", callback_data="del_nepster"))
-    kb.row(InlineKeyboardButton(text="💣 حذف همه چیز", callback_data="del_all"))
-    kb.row(InlineKeyboardButton(text="❌ خروج", callback_data="manage_exit"))
-    
-    await callback.message.edit_text(txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb.as_markup())
+async def manage_back(c: types.CallbackQuery):
+    t = f"🛠 **پنل مدیریت**\n\n🟢 V2Ray: {len(get_from_db('v2ray'))}\n🔵 پروکسی: {len(get_from_db('proxy'))}\n🟣 نپستر: {len(get_from_db('nepster'))}\n📊 کل: {len(get_from_db('all'))}"
+    await c.message.edit_text(t, parse_mode=ParseMode.MARKDOWN, reply_markup=get_manage_kb())
 
 @dp.callback_query(F.data == "stats_users")
-async def stats_users(callback: types.CallbackQuery):
-    if callback.from_user.id != ADMIN_ID:
-        return
-    count = get_users_count()
-    
+async def stats_users(c: types.CallbackQuery):
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="📋 مشاهده جزئیات", callback_data="stats_details"))
     kb.row(InlineKeyboardButton(text="بازگشت 🔙", callback_data="manage_back"))
-    
-    await callback.message.edit_text(
-        f"👥 **آمار کاربران**\n\nتعداد کل کاربران ربات: {count} نفر",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=kb.as_markup()
-    )
+    await c.message.edit_text(f"👥 **آمار کاربران**\n\nتعداد کل کاربران ربات: {get_users_count()} نفر", parse_mode=ParseMode.MARKDOWN, reply_markup=kb.as_markup())
 
 @dp.callback_query(F.data == "stats_details")
-async def stats_details(callback: types.CallbackQuery):
-    if callback.from_user.id != ADMIN_ID:
-        return
-    
+async def stats_details(c: types.CallbackQuery):
     users = get_all_users()
-    if not users:
-        await callback.answer("کاربری یافت نشد.", show_alert=True)
-        return
+    if not users: return await c.answer("کاربری یافت نشد.", show_alert=True)
     
-    text = "📋 **لیست کاربران:**\n\n"
-    messages_to_send = []
-    
+    txt, msgs = "📋 **لیست کاربران:**\n\n", []
     for i, u in enumerate(users, 1):
-        uid = u['user_id']
         name = u['full_name'].replace('_', '\\_').replace('*', '\\*').replace('`', '\\`')
-        uname = f"@{u['username']}" if u['username'] else "ندارد"
-        uname = uname.replace('_', '\\_')
-        j_date = to_jalali(u['join_date'])
-        
-        line = f"👤 {i}. {name} | 🆔 `{uid}`\n🔗 {uname} | 🕒 {j_date}\n\n"
-        
-        if len(text) + len(line) > 4000:
-            messages_to_send.append(text)
-            text = line
-        else:
-            text += line
-            
-    if text:
-        messages_to_send.append(text)
-        
-    for idx, msg in enumerate(messages_to_send):
+        uname = f"@{u['username']}".replace('_', '\\_') if u['username'] else "ندارد"
+        line = f"👤 {i}. {name} | 🆔 `{u['user_id']}`\n🔗 {uname} | 🕒 {to_jalali(u['join_date'])}\n\n"
+        if len(txt) + len(line) > 4000:
+            msgs.append(txt)
+            txt = line
+        else: txt += line
+    if txt: msgs.append(txt)
+    
+    for idx, msg in enumerate(msgs):
         if idx == 0:
-            kb = InlineKeyboardBuilder()
-            kb.row(InlineKeyboardButton(text="بازگشت 🔙", callback_data="stats_users"))
-            await callback.message.edit_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=kb.as_markup())
-        else:
-            await callback.message.answer(msg, parse_mode=ParseMode.MARKDOWN)
+            kb = InlineKeyboardBuilder().row(InlineKeyboardButton(text="بازگشت 🔙", callback_data="stats_users")).as_markup()
+            await c.message.edit_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=kb)
+        else: await c.message.answer(msg, parse_mode=ParseMode.MARKDOWN)
 
 @dp.callback_query(F.data == "manage_exit")
-async def manage_exit(callback: types.CallbackQuery):
-    await callback.message.delete()
-    await callback.answer()
+async def manage_exit(c: types.CallbackQuery):
+    await c.message.delete()
 
-@dp.callback_query(F.data == "del_v2ray")
-async def del_v2ray(callback: types.CallbackQuery):
-    if callback.from_user.id != ADMIN_ID:
-        await callback.answer("دسترسی غیرمجاز", show_alert=True)
-        return
-    count = len(get_from_db("v2ray"))
-    delete_from_db(filter_type="v2ray")
-    await callback.message.edit_text("✅ " + str(count) + " V2Ray حذف شد!", parse_mode=ParseMode.MARKDOWN)
-    await callback.answer()
-
-@dp.callback_query(F.data == "del_proxy")
-async def del_proxy(callback: types.CallbackQuery):
-    if callback.from_user.id != ADMIN_ID:
-        await callback.answer("دسترسی غیرمجاز", show_alert=True)
-        return
-    count = len(get_from_db("proxy"))
-    delete_from_db(filter_type="proxy")
-    await callback.message.edit_text("✅ " + str(count) + " پروکسی حذف شد!", parse_mode=ParseMode.MARKDOWN)
-    await callback.answer()
-
-@dp.callback_query(F.data == "del_nepster")
-async def del_nepster(callback: types.CallbackQuery):
-    if callback.from_user.id != ADMIN_ID:
-        await callback.answer("دسترسی غیرمجاز", show_alert=True)
-        return
-    count = len(get_from_db("nepster"))
-    delete_from_db(filter_type="nepster")
-    await callback.message.edit_text("✅ " + str(count) + " نپستر حذف شد!", parse_mode=ParseMode.MARKDOWN)
-    await callback.answer()
-
-@dp.callback_query(F.data == "del_all")
-async def del_all(callback: types.CallbackQuery):
-    if callback.from_user.id != ADMIN_ID:
-        await callback.answer("دسترسی غیرمجاز", show_alert=True)
-        return
-    total = len(get_from_db("all"))
-    delete_from_db(filter_type="all")
-    await callback.message.edit_text("✅ همه " + str(total) + " مورد حذف شد!", parse_mode=ParseMode.MARKDOWN)
-    await callback.answer()
+@dp.callback_query(F.data.startswith("del_"))
+async def del_callback(c: types.CallbackQuery):
+    if c.from_user.id != ADMIN_ID: return
+    ftype = c.data.replace("del_", "")
+    delete_from_db(filter_type=ftype)
+    await c.message.edit_text(f"✅ بخش {ftype} پاکسازی شد!", reply_markup=InlineKeyboardBuilder().row(InlineKeyboardButton(text="بازگشت 🔙", callback_data="manage_back")).as_markup())
 
 # ============ SUPPORT ============
 @dp.message(F.text == "Support")
 async def support_start(message: Message, state: FSMContext):
-    await message.answer(
-        "📨 **پشتیبانی**\n\nپیام خود را بنویسید.\n🚫 لغو: /cancel",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=types.ReplyKeyboardRemove()
-    )
+    await message.answer("📨 **پشتیبانی**\n\nپیام خود را بنویسید.\n🚫 لغو: /cancel", parse_mode=ParseMode.MARKDOWN, reply_markup=types.ReplyKeyboardRemove())
     await state.set_state(SupportState.waiting_for_message)
 
 @dp.message(SupportState.waiting_for_message)
-async def support_receive_message(message: Message, state: FSMContext):
+async def support_recv(message: Message, state: FSMContext):
     if message.text == "/cancel":
         await state.clear()
-        await message.answer("❌ لغو شد.", reply_markup=get_main_menu())
-        return
-    if not ADMIN_ID:
-        await state.clear()
-        return
-    user = message.from_user
-    info = (
-        "📩 **پیام پشتیبانی**\n\n"
-        "👤 " + user.full_name + "\n"
-        "🆔 @" + (user.username or 'ندارد') + "\n"
-        "🔢 `" + str(user.id) + "`\n"
-        "🕐 " + to_jalali(message.date) + "\n\n"
-        "📝 " + message.text
-    )
+        return await message.answer("❌ لغو شد.", reply_markup=get_main_menu())
+    u = message.from_user
+    info = f"📩 **پیام پشتیبانی**\n\n👤 {u.full_name}\n🆔 @{u.username or 'ندارد'}\n🔢 `{u.id}`\n🕒 {to_jalali(message.date)}\n\n📝 {message.text}"
     try:
         await bot.send_message(ADMIN_ID, info, parse_mode=ParseMode.MARKDOWN)
         await message.answer("✅ ارسال شد.", reply_markup=get_main_menu())
-    except Exception as e:
-        await message.answer("❌ خطا.", reply_markup=get_main_menu())
+    except Exception: await message.answer("❌ خطا در ارسال.")
     await state.clear()
 
-# ============ SEND FUNCTIONS ============
-async def send_v2ray(message: Message, item: Dict):
-    lines = [line.strip() for line in item["text"].split('\n') if line.strip()]
-    config_text = '\n'.join(lin
+# ============ MAIN ============
+async def main():
+    init_database()
+    if WEBHOOK_URL:
+        from aiogram.webhook.aiohttp_server import SimpleRequestHandler
+        await bot.delete_webhook()
+        await bot.set_webhook(WEBHOOK_URL + "/webhook", allowed_updates=["message", "channel_post", "callback_query"])
+        app = web.Application()
+        app.router.add_get("/", health_check)
+        SimpleRequestHandler(dispatcher=dp, bot=bot).register(app, path="/webhook")
+        runner = web.AppRunner(app)
+        await runner.setup()
+        await web.TCPSite(runner, "0.0.0.0", PORT).start()
+        await asyncio.Event().wait()
+    else:
+        from threading import Thread as T
+        def run_health():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            app = web.Application()
+            app.router.add_get("/", health_check)
+            runner = web.AppRunner(app)
+            loop.run_until_complete(runner.setup())
+            loop.run_until_complete(web.TCPSite(runner, "0.0.0.0", PORT).start())
+            loop.run_forever()
+        T(target=run_health, daemon=True).start()
+        await dp.start_polling(bot, allowed_updates=["message", "channel_post", "callback_query"])
+
+if __name__ == "__main__":
+    asyncio.run(main())
