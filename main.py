@@ -1,7 +1,7 @@
 # ============ MANAGE PANEL ============
 ITEMS_PER_PAGE = 10
 
-async def send_manage_page(target, state: FSMContext, manage_type: str, title: str, items: list, page: int, edit: bool = False):
+async def send_manage_page(target, state, manage_type: str, title: str, items: list, page: int, edit: bool = False):
     total_pages = max(1, (len(items) + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE)
     page = max(0, min(page, total_pages - 1))
     
