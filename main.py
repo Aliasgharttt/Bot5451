@@ -87,6 +87,7 @@ def init_database():
                 file_name TEXT
             )
         """)
+        # NEW: users table
         db_query("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -132,7 +133,7 @@ def save_user_to_db(user_id: int, first_name: str, last_name: str, username: str
         logger.error(f"❌ User save error: {e}")
 
 def get_users_from_db() -> List[Dict]:
-    """Get all users from database"""
+    """Get all users"""
     try:
         result = db_query("SELECT * FROM users ORDER BY last_seen DESC")
         users = []
@@ -342,7 +343,7 @@ async def cmd_start(message: Message):
     user = message.from_user
     user_link = "[" + user.full_name + "](tg://user?id=" + str(user.id) + ")"
     
-    # Save user to database
+    # NEW: Save user to database
     save_user_to_db(user.id, user.first_name or "", user.last_name or "", user.username or "")
     
     await message.answer(
@@ -549,4 +550,4 @@ async def support_receive_message(message: Message, state: FSMContext):
         "📝 " + message.text
     )
     try:
-        await bot.send_
+     
