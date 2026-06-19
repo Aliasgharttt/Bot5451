@@ -323,10 +323,8 @@ async def get_proxy(message: Message):
     if not items:
         await message.answer("❌ پروکسی یافت نشد.", reply_markup=get_main_menu())
         return
-    
     count = min(3, len(items))
     selected = random.sample(items, count)
-    
     await message.answer(f"🔵 **{count} پروکسی رندوم:**", parse_mode=ParseMode.MARKDOWN)
     for item in selected:
         await send_proxy(message, item)
@@ -362,14 +360,11 @@ async def show_page(callback: types.CallbackQuery, state: FSMContext, manage_typ
     total = len(items)
     total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
     page = max(0, min(page, total_pages - 1))
-    
     start = page * PAGE_SIZE
     end = min(start + PAGE_SIZE, total)
     page_items = items[start:end]
-    
     names = {"v2ray": "🟢 V2Ray", "proxy": "🔵 پروکسی", "nepster": "🟣 نپستر"}
     title = names.get(manage_type, "آیتم‌ها")
-    
     txt = f"{title} (صفحه {page + 1} از {total_pages}):\n\n"
     for i, item in enumerate(page_items, start + 1):
         if manage_type == "nepster":
@@ -379,7 +374,6 @@ async def show_page(callback: types.CallbackQuery, state: FSMContext, manage_typ
             txt += f"{i}️⃣ {short}...\n"
         txt += f"   📅 {to_jalali(item['date'])}\n\n"
     txt += "شماره (۳) | چندتایی (۱,۴,۷) | بازه (۱-۹) | all"
-    
     await state.update_data(manage_type=manage_type, manage_items=items, manage_page=page)
     await state.set_state(ManageState.waiting_for_delete)
     await callback.message.edit_text(txt, parse_mode=ParseMode.MARKDOWN,
@@ -435,21 +429,17 @@ async def manage_delete(message: Message, state: FSMContext):
     if message.text == "برگشت":
         await state.clear()
         return await cmd_manage(message, state)
-    
     data = await state.get_data()
     items = data.get("manage_items", [])
     manage_type = data.get("manage_type", "")
     page = data.get("manage_page", 0)
-    
     if message.text.lower() == "all":
         delete_from_db(filter_type=manage_type)
         await message.answer(f"✅ همه {len(items)} مورد حذف شدند!")
         await state.clear()
         return await cmd_manage(message, state)
-    
     text = message.text.strip()
     indices = set()
-    
     try:
         if '-' in text and ',' not in text:
             start, end = text.split('-')
@@ -462,35 +452,25 @@ async def manage_delete(message: Message, state: FSMContext):
             indices.add(int(text) - 1)
     except ValueError:
         return await message.answer("❌ فرمت اشتباه. مثال: ۳ یا ۱,۴,۷ یا ۱-۹ یا all")
-    
     invalid = [i + 1 for i in indices if i < 0 or i >= len(items)]
     if invalid:
         return await message.answer(f"❌ اعداد {invalid} خارج از محدوده (۱ تا {len(items)})")
-    
     for index in sorted(indices, reverse=True):
         delete_from_db(db_id=items[index]["db_id"])
-    
     await message.answer(f"✅ {len(indices)} مورد حذف شد!")
-    
     items = get_from_db(manage_type)
     total = len(items)
-    
     if total == 0:
         await state.clear()
         return await cmd_manage(message, state)
-    
     total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
     new_page = min(page, total_pages - 1)
-    
     await state.update_data(manage_items=items, manage_page=new_page)
-    
     start = new_page * PAGE_SIZE
     end = min(start + PAGE_SIZE, total)
     page_items = items[start:end]
-    
     names = {"v2ray": "🟢 V2Ray", "proxy": "🔵 پروکسی", "nepster": "🟣 نپستر"}
     title = names.get(manage_type, "آیتم‌ها")
-    
     txt = f"{title} (صفحه {new_page + 1} از {total_pages}):\n\n"
     for i, item in enumerate(page_items, start + 1):
         if manage_type == "nepster":
@@ -500,7 +480,6 @@ async def manage_delete(message: Message, state: FSMContext):
             txt += f"{i}️⃣ {short}...\n"
         txt += f"   📅 {to_jalali(item['date'])}\n\n"
     txt += "شماره (۳) | چندتایی (۱,۴,۷) | بازه (۱-۹) | all"
-    
     await message.answer(txt, parse_mode=ParseMode.MARKDOWN,
                          reply_markup=build_page_keyboard(manage_type, new_page, total_pages))
 
@@ -575,4 +554,6 @@ async def send_proxy(message: Message, item: Dict):
 async def send_nepster(message: Message, item: Dict):
     if item.get("file_id"):
         await bot.send_document(
-            ch
+            chat_id=message.chat.id,
+            document=item["file_id"],
+            caption=f"🟣 <b>نپستر</b>\n📄 {h
