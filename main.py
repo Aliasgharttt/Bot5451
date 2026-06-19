@@ -362,8 +362,22 @@ async def get_nepster(message: Message):
     if not items:
         await message.answer("❌ نپستر یافت نشد.", reply_markup=get_main_menu())
         return
-    item = random.choice(items)
-    await send_nepster(message, item)
+    
+    # Send waiting emoji
+    wait_msg = await message.answer("⌛")
+    
+    try:
+        item = random.choice(items)
+        await send_nepster(message, item)
+    except Exception as e:
+        logger.error(f"❌ Nepster error: {e}")
+        await message.answer("❌ خطا در ارسال فایل.", reply_markup=get_main_menu())
+    finally:
+        # Delete waiting emoji
+        try:
+            await wait_msg.delete()
+        except:
+            pass
     # ============ MANAGE PANEL ============
 def get_manage_kb():
     kb = InlineKeyboardBuilder()
