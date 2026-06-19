@@ -48,8 +48,7 @@ dp = Dispatcher(storage=storage)
 # ============ FSM ============
 class SupportState(StatesGroup):
     waiting_for_message = State()
-
-# ============ DATABASE ============
+    # ============ DATABASE ============
 def db_query(sql: str, params: List = None):
     try:
         url = f"{DB_URL}"
@@ -144,8 +143,7 @@ def delete_from_db(db_id: int = None, filter_type: str = None):
             db_query("DELETE FROM configs WHERE type = ?", [filter_type])
     except Exception as e:
         logger.error(f"❌ DB delete error: {e}")
-
-# ============ JALALI HELPER ============
+        # ============ JALALI HELPER ============
 def to_jalali(dt: datetime) -> str:
     iran_tz = pytz.timezone('Asia/Tehran')
     dt_iran = dt.astimezone(iran_tz)
@@ -170,8 +168,7 @@ def detect_type(text: str) -> str:
 
 def is_npvt_file(file_name: str = None) -> bool:
     return file_name and file_name.lower().endswith('.npvt')
-
-# ============ CHANNEL POST HANDLER ============
+    # ============ CHANNEL POST HANDLER ============
 @dp.channel_post()
 async def handle_channel_post(message: Message):
     if message.chat.id != CHANNEL_ID:
@@ -254,8 +251,7 @@ async def handle_channel_post(message: Message):
                 "file_name": ""
             })
         return
-
-# ============ KEYBOARDS ============
+        # ============ KEYBOARDS ============
 def get_main_menu():
     builder = ReplyKeyboardBuilder()
     builder.row(
@@ -311,8 +307,7 @@ async def get_nepster(message: Message):
         return
     item = random.choice(items)
     await send_nepster(message, item)
-
-# ============ MANAGE PANEL ============
+    # ============ MANAGE PANEL ============
 @dp.message(Command("manage"))
 async def cmd_manage(message: Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
@@ -378,8 +373,24 @@ async def del_all(callback: types.CallbackQuery):
     delete_from_db(filter_type="all")
     await callback.message.edit_text("✅ همه " + str(total) + " مورد حذف شد!", parse_mode=ParseMode.MARKDOWN)
     await callback.answer()
-
-# ============ SUPPORT ============
+    # ============ STATS ============
+@dp.message(Command("stats"))
+async def cmd_stats(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    v2ray_count = len(get_from_db("v2ray"))
+    proxy_count = len(get_from_db("proxy"))
+    nepster_count = len(get_from_db("nepster"))
+    total = v2ray_count + proxy_count + nepster_count
+    
+    txt = ("📊 **آمار ربات**\n\n"
+           "🟢 V2Ray: " + str(v2ray_count) + " عدد\n"
+           "🔵 پروکسی: " + str(proxy_count) + " عدد\n"
+           "🟣 نپستر: " + str(nepster_count) + " عدد\n"
+           "📦 کل: " + str(total))
+    
+    await message.answer(txt, parse_mode=ParseMode.MARKDOWN)
+    # ============ SUPPORT ============
 @dp.message(F.text == "Support")
 async def support_start(message: Message, state: FSMContext):
     await message.answer(
@@ -413,8 +424,7 @@ async def support_receive_message(message: Message, state: FSMContext):
     except Exception as e:
         await message.answer("❌ خطا.", reply_markup=get_main_menu())
     await state.clear()
-
-# ============ SEND FUNCTIONS ============
+    # ============ SEND FUNCTIONS ============
 async def send_v2ray(message: Message, item: Dict):
     lines = [line.strip() for line in item["text"].split('\n') if line.strip()]
     config_text = '\n'.join(lines)
@@ -470,8 +480,7 @@ async def send_nepster(message: Message, item: Dict):
             "🟣 <b>نپستر</b>\n\n❌ فایل در دسترس نیست.",
             parse_mode=ParseMode.HTML
         )
-
-# ============ MAIN (WEBHOOK) ============
+        # ============ MAIN (WEBHOOK) ============
 async def main():
     logger.info("🚀 Starting bot...")
     init_database()
@@ -503,7 +512,17 @@ async def main():
         await asyncio.Event().wait()
     else:
         # POLLING MODE (fallback)
-        Thread(target=run_health_server, daemon=True).start()
+        def run_health():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            app = web.Application()
+            app.router.add_get("/", health_check)
+            runner = web.AppRunner(app)
+            loop.run_until_complete(runner.setup())
+            site = web.TCPSite(runner, "0.0.0.0", PORT)
+            loop.run_until_complete(site.start())
+            loop.run_forever()
+        Thread(target=run_health, daemon=True).start()
         logger.info("✅ Bot ready!")
         await dp.start_polling(bot, allowed_updates=["message", "channel_post", "callback_query"])
 
