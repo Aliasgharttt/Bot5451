@@ -9,6 +9,7 @@ import jdatetime
 import pytz
 import html
 import string
+import tempfile
 from datetime import datetime
 from threading import Thread
 from typing import List, Dict
@@ -16,7 +17,7 @@ from typing import List, Dict
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.enums import ParseMode, ButtonStyle
 from aiogram.filters import Command
-from aiogram.types import Message, KeyboardButton, InlineKeyboardButton
+from aiogram.types import Message, KeyboardButton, InlineKeyboardButton, FSInputFile
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
 from aiogram.client.default import DefaultBotProperties
 from aiogram.fsm.context import FSMContext
@@ -461,14 +462,26 @@ async def send_proxy(message: Message, item: Dict):
 
 async def send_nepster(message: Message, item: Dict):
     if item.get("file_id"):
-        name = html.escape(item.get('file_name', 'config.npvt'))
-        cap = "🟣 <b>نپستر</b>\n📄 " + name
-        await bot.send_document(
-            chat_id=message.chat.id,
-            document=item["file_id"],
-            caption=cap,
-            parse_mode=ParseMode.HTML
-        )
+        new_name = item.get('file_name', 'config.npvt')
+        try:
+            # دانلود فایل
+            file_data = await bot.download(item["file_id"])
+            # ذخیره موقت با اسم جدید
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".npvt") as tmp:
+                tmp.write(file_data.read())
+                tmp_path = tmp.name
+            # ارسال با اسم جدید
+            await bot.send_document(
+                chat_id=message.chat.id,
+                document=FSInputFile(tmp_path, filename=new_name),
+                caption="🟣 <b>نپستر</b>\n📄 " + html.escape(new_name),
+                parse_mode=ParseMode.HTML
+            )
+            # حذف فایل موقت
+            os.remove(tmp_path)
+        except Exception as e:
+            logger.error(f"❌ Nepster send error: {e}")
+            await message.answer("🟣 <b>نپستر</b>\n\n❌ خطا در ارسال فایل.", parse_mode=ParseMode.HTML)
     else:
         await message.answer(
             "🟣 <b>نپستر</b>\n\n❌ فایل در دسترس نیست.",
