@@ -551,5 +551,107 @@ async def support_receive_message(message: Message, state: FSMContext):
     await state.clear()
 
 # ============ SEND FUNCTIONS ============
-async def send_v2ray(message: Message, item: Dict):
-    lines = [line.strip() for line in item["text"].split('\n') if line.strip()]
+async def send_v2ray(message: Message, item: Dict): 
+lines = [line.strip() for line in item["text"].split('\n') if line.strip()]
+    config_text = item["text"]
+    
+    # Escape special characters for Markdown
+    config_text_escaped = config_text.replace('_', '\\_').replace('*', '\\*').replace('`', '\\`').replace('[', '\\[')
+    
+    if len(config_text_escaped) <= 4000:
+        await message.answer(
+            f"🟢 **V2Ray Config:**\n\n`{config_text_escaped}`",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=get_main_menu()
+        )
+    else:
+        # For long configs, send as file
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
+            f.write(config_text)
+            temp_path = f.name
+        
+        try:
+            await message.answer_document(
+                FSInputFile(temp_path, filename="v2ray_config.txt"),
+                caption="🟢 V2Ray Config",
+                reply_markup=get_main_menu()
+            )
+        finally:
+            os.unlink(temp_path)
+
+async def send_proxy(message: Message, item: Dict):
+    proxy_text = item["text"]
+    
+    # Escape for Markdown
+    proxy_text_escaped = proxy_text.replace('_', '\\_').replace('*', '\\*').replace('`', '\\`')
+    
+    await message.answer(
+        f"🔵 `{proxy_text_escaped}`",
+        parse_mode=ParseMode.MARKDOWN
+    )
+
+async def send_nepster(message: Message, item: Dict):
+    try:
+        if item.get("file_id"):
+            await message.answer_document(
+                item["file_id"],
+                caption=f"🟣 **{item.get('file_name', 'NapsternetV')}**\n\n📝 {item['text']}",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=get_main_menu()
+            )
+        else:
+            await message.answer(
+                f"🟣 **NapsternetV Config:**\n\n`{item['text']}`",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=get_main_menu()
+            )
+    except Exception as e:
+        logger.error(f"❌ Send nepster error: {e}")
+        await message.answer("❌ خطا در ارسال فایل نپستر.", reply_markup=get_main_menu())
+
+# ============ WEBHOOK SETUP ============
+async def on_startup():
+    init_database()
+    logger.info("✅ Bot started")
+    
+    if WEBHOOK_URL:
+        webhook_path = f"/webhook/{BOT_TOKEN}"
+        await bot.set_webhook(
+            url=f"{WEBHOOK_URL}{webhook_path}",
+            drop_pending_updates=True
+        )
+        logger.info(f"🌐 Webhook set to: {WEBHOOK_URL}{webhook_path}")
+
+async def on_shutdown():
+    if WEBHOOK_URL:
+        await bot.delete_webhook()
+    await bot.session.close()
+    logger.info("❌ Bot stopped")
+
+# ============ MAIN ============
+async def main():
+    if WEBHOOK_URL:
+        # Webhook mode
+        app = web.Application()
+        
+        webhook_path = f"/webhook/{BOT_TOKEN}"
+        app.router.add_post(webhook_path, lambda request: dp.feed_webhook_update(bot, await request.json()))
+        app.router.add_get("/", health_check)
+        app.router.add_get("/health", health_check)
+        
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, '0.0.0.0', PORT)
+        await site.start()
+        
+        logger.info(f"🚀 Webhook server running on port {PORT}")
+        
+        # Keep running
+        await asyncio.Event().wait()
+    else:
+        # Polling mode
+        logger.info("🚀 Bot starting in polling mode...")
+        await dp.start_polling(bot, drop_pending_updates=True)
+
+if __name__ == "__main__":
+    asyncio.run(main())
