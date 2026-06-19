@@ -186,6 +186,8 @@ def is_npvt_file(file_name: str = None) -> bool:
 async def handle_channel_post(message: Message):
     if message.chat.id != CHANNEL_ID:
         return
+    
+    # 1. NEPSTER file (.npvt)
     if message.document:
         file_name = message.document.file_name or ""
         if is_npvt_file(file_name):
@@ -198,15 +200,43 @@ async def handle_channel_post(message: Message):
                 "file_name": file_name
             })
             return
-    if message.text:
-        save_to_db({
-            "id": message.message_id,
-            "text": message.text,
-            "date": message.date,
-            "type": detect_type(message.text),
-            "file_id": None,
-            "file_name": ""
-        })
+    
+    text = message.text or message.caption or ""
+    if not text:
+        return
+    
+    # 2. PROXY - extract only t.me/proxy or tg://proxy links
+    proxy_links = re.findall(r'(?:https?://t\.me/proxy|tg://proxy)\S+', text)
+    if proxy_links:
+        for link in proxy_links:
+            save_to_db({
+                "id": message.message_id,
+                "text": link,
+                "date": message.date,
+                "type": "proxy",
+                "file_id": None,
+                "file_name": ""
+            })
+        return
+    
+    # 3. V2RAY - extract only protocol links
+    v2ray_links = re.findall(
+        r'(?:vmess|vless|trojan|hysteria2?|tuic|ss|ssr|shadowrocket)://\S+',
+        text
+    )
+    if v2ray_links:
+        for link in v2ray_links:
+            save_to_db({
+                "id": message.message_id,
+                "text": link,
+                "date": message.date,
+                "type": "v2ray",
+                "file_id": None,
+                "file_name": ""
+            })
+        return
+    
+    # 4. Nothing matched - ignore
 
 # ============ KEYBOARDS ============
 def get_main_menu():
@@ -266,8 +296,14 @@ async def get_proxy(message: Message):
     if not items:
         await message.answer("❌ پروکسی یافت نشد.", reply_markup=get_main_menu())
         return
-    item = random.choice(items)
-    await send_proxy(message, item)
+    
+    count = min(3, len(items))
+    selected = random.sample(items, count)
+    
+    await message.answer(f"🔵 **{count} پروکسی رندوم:**", parse_mode=ParseMode.MARKDOWN)
+    for item in selected:
+        await send_proxy(message, item)
+    await message.answer("✅", reply_markup=get_main_menu())
 
 @dp.message(F.text == "NPT (NapsternetV)")
 async def get_nepster(message: Message):
@@ -424,10 +460,8 @@ async def support_receive_message(message: Message, state: FSMContext):
 
 # ============ SEND FUNCTIONS ============
 async def send_v2ray(message: Message, item: Dict):
-    # Extract only the config line(s), trim empty lines
     lines = [line.strip() for line in item["text"].split('\n') if line.strip()]
     config_text = '\n'.join(lines)
-    # Escape HTML and wrap in <pre> for copy-paste friendly display
     escaped = html.escape(config_text)
     await message.answer(
         f"🟢 <b>V2Ray</b>\n<pre>{escaped[:1000]}</pre>",
