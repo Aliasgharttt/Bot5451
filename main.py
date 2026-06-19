@@ -10,7 +10,7 @@ import pytz
 import html
 import string
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 from threading import Thread
 from typing import List, Dict
 
@@ -88,6 +88,15 @@ def init_database():
                 file_name TEXT
             )
         """)
+        # اضافه کردن جدول کاربران
+        db_query("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                full_name TEXT,
+                username TEXT,
+                join_date TEXT
+            )
+        """)
         logger.info("✅ Database initialized")
     except Exception as e:
         logger.error(f"❌ Database init error: {e}")
@@ -144,6 +153,47 @@ def delete_from_db(db_id: int = None, filter_type: str = None):
             db_query("DELETE FROM configs WHERE type = ?", [filter_type])
     except Exception as e:
         logger.error(f"❌ DB delete error: {e}")
+
+# ----- توابع مدیریت کاربران -----
+def save_user(user_id: int, full_name: str, username: str, join_date: datetime):
+    try:
+        existing = db_query("SELECT user_id FROM users WHERE user_id = ?", [user_id])
+        if not existing or "rows" not in existing or len(existing["rows"]) == 0:
+            db_query("""
+                INSERT INTO users (user_id, full_name, username, join_date)
+                VALUES (?, ?, ?, ?)
+            """, [user_id, full_name, username, join_date.strftime('%Y-%m-%d %H:%M:%S')])
+    except Exception as e:
+        logger.error(f"❌ DB save_user error: {e}")
+
+def get_users_count() -> int:
+    try:
+        res = db_query("SELECT COUNT(*) FROM users")
+        if res and "rows" in res and res["rows"]:
+            return res["rows"][0][0]
+    except Exception as e:
+        logger.error(f"❌ DB get_users_count error: {e}")
+    return 0
+
+def get_all_users() -> List[Dict]:
+    try:
+        res = db_query("SELECT user_id, full_name, username, join_date FROM users ORDER BY join_date DESC")
+        users = []
+        if res and "rows" in res:
+            for row in res["rows"]:
+                dt = datetime.strptime(row[3], '%Y-%m-%d %H:%M:%S')
+                dt = dt.replace(tzinfo=timezone.utc)
+                users.append({
+                    "user_id": row[0],
+                    "full_name": row[1] or "",
+                    "username": row[2] or "",
+                    "join_date": dt
+                })
+        return users
+    except Exception as e:
+        logger.error(f"❌ DB get_all_users error: {e}")
+        return []
+# -------------------------------
 
 # ============ JALALI HELPER ============
 def to_jalali(dt: datetime) -> str:
@@ -275,6 +325,15 @@ def get_main_menu():
 async def cmd_start(message: Message):
     user = message.from_user
     user_link = "[" + user.full_name + "](tg://user?id=" + str(user.id) + ")"
+    
+    # ذخیره کاربر در دیتابیس در صورت استارت کردن
+    save_user(
+        user_id=user.id,
+        full_name=user.full_name or "",
+        username=user.username or "",
+        join_date=message.date
+    )
+
     await message.answer(
         "سلام " + user_link + " 👋 خوش آمدید!",
         parse_mode=ParseMode.MARKDOWN,
@@ -318,6 +377,7 @@ async def cmd_manage(message: Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         return
     await state.clear()
+    
     v2ray_count = len(get_from_db("v2ray"))
     proxy_count = len(get_from_db("proxy"))
     nepster_count = len(get_from_db("nepster"))
@@ -326,6 +386,7 @@ async def cmd_manage(message: Message, state: FSMContext):
     txt = "🛠 **پنل مدیریت**\n\n🟢 V2Ray: " + str(v2ray_count) + " عدد\n🔵 پروکسی: " + str(proxy_count) + " عدد\n🟣 نپستر: " + str(nepster_count) + " عدد\n📊 کل: " + str(total)
     
     kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="👥 آمار کاربران", callback_data="stats_users")) # دکمه جدید آمار
     kb.row(InlineKeyboardButton(text="🗑 حذف همه V2Ray", callback_data="del_v2ray"))
     kb.row(InlineKeyboardButton(text="🗑 حذف همه پروکسی", callback_data="del_proxy"))
     kb.row(InlineKeyboardButton(text="🗑 حذف همه نپستر", callback_data="del_nepster"))
@@ -333,6 +394,84 @@ async def cmd_manage(message: Message, state: FSMContext):
     kb.row(InlineKeyboardButton(text="❌ خروج", callback_data="manage_exit"))
     
     await message.answer(txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb.as_markup())
+
+@dp.callback_query(F.data == "manage_back")
+async def manage_back(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    
+    v2ray_count = len(get_from_db("v2ray"))
+    proxy_count = len(get_from_db("proxy"))
+    nepster_count = len(get_from_db("nepster"))
+    total = v2ray_count + proxy_count + nepster_count
+    
+    txt = "🛠 **پنل مدیریت**\n\n🟢 V2Ray: " + str(v2ray_count) + " عدد\n🔵 پروکسی: " + str(proxy_count) + " عدد\n🟣 نپستر: " + str(nepster_count) + " عدد\n📊 کل: " + str(total)
+    
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="👥 آمار کاربران", callback_data="stats_users"))
+    kb.row(InlineKeyboardButton(text="🗑 حذف همه V2Ray", callback_data="del_v2ray"))
+    kb.row(InlineKeyboardButton(text="🗑 حذف همه پروکسی", callback_data="del_proxy"))
+    kb.row(InlineKeyboardButton(text="🗑 حذف همه نپستر", callback_data="del_nepster"))
+    kb.row(InlineKeyboardButton(text="💣 حذف همه چیز", callback_data="del_all"))
+    kb.row(InlineKeyboardButton(text="❌ خروج", callback_data="manage_exit"))
+    
+    await callback.message.edit_text(txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb.as_markup())
+
+@dp.callback_query(F.data == "stats_users")
+async def stats_users(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    count = get_users_count()
+    
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="📋 مشاهده جزئیات", callback_data="stats_details"))
+    kb.row(InlineKeyboardButton(text="بازگشت 🔙", callback_data="manage_back"))
+    
+    await callback.message.edit_text(
+        f"👥 **آمار کاربران**\n\nتعداد کل کاربران ربات: {count} نفر",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=kb.as_markup()
+    )
+
+@dp.callback_query(F.data == "stats_details")
+async def stats_details(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        return
+    
+    users = get_all_users()
+    if not users:
+        await callback.answer("کاربری یافت نشد.", show_alert=True)
+        return
+    
+    text = "📋 **لیست کاربران:**\n\n"
+    messages_to_send = []
+    
+    for i, u in enumerate(users, 1):
+        uid = u['user_id']
+        name = u['full_name'].replace('_', '\\_').replace('*', '\\*').replace('`', '\\`')
+        uname = f"@{u['username']}" if u['username'] else "ندارد"
+        uname = uname.replace('_', '\\_')
+        j_date = to_jalali(u['join_date'])
+        
+        line = f"👤 {i}. {name} | 🆔 `{uid}`\n🔗 {uname} | 🕒 {j_date}\n\n"
+        
+        # مدیریت محدودیت طول پیام در تلگرام
+        if len(text) + len(line) > 4000:
+            messages_to_send.append(text)
+            text = line
+        else:
+            text += line
+            
+    if text:
+        messages_to_send.append(text)
+        
+    for idx, msg in enumerate(messages_to_send):
+        if idx == 0:
+            kb = InlineKeyboardBuilder()
+            kb.row(InlineKeyboardButton(text="بازگشت 🔙", callback_data="stats_users"))
+            await callback.message.edit_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=kb.as_markup())
+        else:
+            await callback.message.answer(msg, parse_mode=ParseMode.MARKDOWN)
 
 @dp.callback_query(F.data == "manage_exit")
 async def manage_exit(callback: types.CallbackQuery):
@@ -415,97 +554,4 @@ async def support_receive_message(message: Message, state: FSMContext):
     await state.clear()
 
 # ============ SEND FUNCTIONS ============
-async def send_v2ray(message: Message, item: Dict):
-    lines = [line.strip() for line in item["text"].split('\n') if line.strip()]
-    config_text = '\n'.join(lines)
-    escaped = html.escape(config_text)
-    await message.answer(
-        "🟢 <b>V2Ray</b>\n<pre>" + escaped[:1000] + "</pre>",
-        parse_mode=ParseMode.HTML,
-        disable_web_page_preview=True
-    )
-
-async def send_proxy(message: Message, item: Dict):
-    text = item["text"]
-    link = None
-    for line in text.split('\n'):
-        if 't.me/proxy' in line:
-            urls = re.findall(r'https?://t\.me/proxy\S+', line)
-            if urls:
-                link = urls[0]
-            break
-    if link:
-        await message.answer(
-            "🔵 <b>MTProto</b>\n\n<a href='" + html.escape(link) + "'>⚡ کلیک کنید</a>",
-            parse_mode=ParseMode.HTML,
-            disable_web_page_preview=True
-        )
-    else:
-        await message.answer(
-            "🔵 <b>پروکسی</b>\n\n" + html.escape(text[:400]),
-            parse_mode=ParseMode.HTML,
-            disable_web_page_preview=True
-        )
-
-async def send_nepster(message: Message, item: Dict):
-    if item.get("file_id"):
-        new_name = item.get('file_name', 'config.npvt')
-        try:
-            file_data = await bot.download(item["file_id"])
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".npvt") as tmp:
-                tmp.write(file_data.read())
-                tmp_path = tmp.name
-            await bot.send_document(
-                chat_id=message.chat.id,
-                document=FSInputFile(tmp_path, filename=new_name),
-                caption="🟣 <b>نپستر</b>\n📄 " + html.escape(new_name),
-                parse_mode=ParseMode.HTML
-            )
-            os.remove(tmp_path)
-        except Exception as e:
-            logger.error(f"❌ Nepster send error: {e}")
-            await message.answer("🟣 <b>نپستر</b>\n\n❌ خطا در ارسال فایل.", parse_mode=ParseMode.HTML)
-    else:
-        await message.answer(
-            "🟣 <b>نپستر</b>\n\n❌ فایل در دسترس نیست.",
-            parse_mode=ParseMode.HTML
-        )
-
-# ============ MAIN (WEBHOOK) ============
-async def main():
-    logger.info("🚀 Starting bot...")
-    init_database()
-    
-    if WEBHOOK_URL:
-        # WEBHOOK MODE
-        from aiogram.webhook.aiohttp_server import SimpleRequestHandler
-        
-        webhook_path = "/webhook"
-        webhook_full_url = WEBHOOK_URL + webhook_path
-        
-        await bot.delete_webhook()
-        await bot.set_webhook(webhook_full_url, allowed_updates=["message", "channel_post", "callback_query"])
-        logger.info("✅ Webhook set to: " + webhook_full_url)
-        
-        app = web.Application()
-        app.router.add_get("/", health_check)
-        
-        handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
-        handler.register(app, path=webhook_path)
-        
-        logger.info("🚀 Webhook server starting on port " + str(PORT))
-        
-        runner = web.AppRunner(app)
-        await runner.setup()
-        site = web.TCPSite(runner, "0.0.0.0", PORT)
-        await site.start()
-        
-        await asyncio.Event().wait()
-    else:
-        # POLLING MODE (fallback)
-        Thread(target=run_health_server, daemon=True).start()
-        logger.info("✅ Bot ready!")
-        await dp.start_polling(bot, allowed_updates=["message", "channel_post", "callback_query"])
-
-if __name__ == "__main__":
-    asyncio.run(main())
+async def send_v2ray
