@@ -87,6 +87,16 @@ def init_database():
                 file_name TEXT
             )
         """)
+        db_query("""
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                first_name TEXT,
+                last_name TEXT,
+                username TEXT,
+                first_seen TEXT,
+                last_seen TEXT
+            )
+        """)
         logger.info("✅ Database initialized")
     except Exception as e:
         logger.error(f"❌ Database init error: {e}")
@@ -106,6 +116,37 @@ def save_to_db(item: Dict):
         logger.info(f"💾 Saved: {item['type']}")
     except Exception as e:
         logger.error(f"❌ DB save error: {e}")
+
+def save_user_to_db(user_id: int, first_name: str, last_name: str, username: str):
+    try:
+        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        result = db_query("SELECT user_id FROM users WHERE user_id = ?", [user_id])
+        if result and "rows" in result and len(result["rows"]) > 0:
+            db_query("UPDATE users SET last_seen = ?, first_name = ?, last_name = ?, username = ? WHERE user_id = ?",
+                     [now, first_name or "", last_name or "", username or "", user_id])
+        else:
+            db_query("INSERT INTO users (user_id, first_name, last_name, username, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?)",
+                     [user_id, first_name or "", last_name or "", username or "", now, now])
+    except:
+        pass
+
+def get_users_from_db():
+    try:
+        result = db_query("SELECT * FROM users ORDER BY last_seen DESC")
+        users = []
+        if result and "rows" in result:
+            for row in result["rows"]:
+                users.append({
+                    "user_id": row[0],
+                    "first_name": row[1] or "",
+                    "last_name": row[2] or "",
+                    "username": row[3] or "",
+                    "first_seen": row[4] or "",
+                    "last_seen": row[5] or ""
+                })
+        return users
+    except:
+        return []
 
 def get_from_db(filter_type: str = "all") -> List[Dict]:
     try:
@@ -149,6 +190,15 @@ def to_jalali(dt: datetime) -> str:
     dt_iran = dt.astimezone(iran_tz)
     jd = jdatetime.datetime.fromgregorian(datetime=dt_iran)
     return jd.strftime('%Y/%m/%d %H:%M')
+
+def to_jalali_str(date_str: str) -> str:
+    if not date_str:
+        return "نامشخص"
+    try:
+        dt = datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S')
+        return to_jalali(dt)
+    except:
+        return date_str
 
 def random_name(length=6):
     chars = string.ascii_letters + string.digits
@@ -271,6 +321,10 @@ def get_main_menu():
 async def cmd_start(message: Message):
     user = message.from_user
     user_link = "[" + user.full_name + "](tg://user?id=" + str(user.id) + ")"
+    
+    # Save user
+    save_user_to_db(user.id, user.first_name or "", user.last_name or "", user.username or "")
+    
     await message.answer(
         "سلام " + user_link + " 👋 خوش آمدید!",
         parse_mode=ParseMode.MARKDOWN,
@@ -317,14 +371,21 @@ async def cmd_manage(message: Message, state: FSMContext):
     proxy_count = len(get_from_db("proxy"))
     nepster_count = len(get_from_db("nepster"))
     total = v2ray_count + proxy_count + nepster_count
+    user_count = len(get_users_from_db())
     
-    txt = "🛠 **پنل مدیریت**\n\n🟢 V2Ray: " + str(v2ray_count) + " عدد\n🔵 پروکسی: " + str(proxy_count) + " عدد\n🟣 نپستر: " + str(nepster_count) + " عدد\n📊 کل: " + str(total)
+    txt = ("🛠 **پنل مدیریت**\n\n"
+           "🟢 V2Ray: " + str(v2ray_count) + " عدد\n"
+           "🔵 پروکسی: " + str(proxy_count) + " عدد\n"
+           "🟣 نپستر: " + str(nepster_count) + " عدد\n"
+           "📊 کل: " + str(total) + "\n"
+           "👥 کاربران: " + str(user_count) + " نفر")
     
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="🗑 حذف همه V2Ray", callback_data="del_v2ray"))
     kb.row(InlineKeyboardButton(text="🗑 حذف همه پروکسی", callback_data="del_proxy"))
     kb.row(InlineKeyboardButton(text="🗑 حذف همه نپستر", callback_data="del_nepster"))
     kb.row(InlineKeyboardButton(text="💣 حذف همه چیز", callback_data="del_all"))
+    kb.row(InlineKeyboardButton(text="📋 جزئیات کاربران", callback_data="user_details"))
     kb.row(InlineKeyboardButton(text="❌ خروج", callback_data="manage_exit"))
     
     await message.answer(txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb.as_markup())
@@ -332,6 +393,70 @@ async def cmd_manage(message: Message, state: FSMContext):
 @dp.callback_query(F.data == "manage_exit")
 async def manage_exit(callback: types.CallbackQuery):
     await callback.message.delete()
+    await callback.answer()
+
+@dp.callback_query(F.data == "user_details")
+async def user_details(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("دسترسی غیرمجاز", show_alert=True)
+        return
+    users = get_users_from_db()
+    total = len(users)
+    
+    txt = "📋 **جزئیات کاربران** (" + str(total) + " نفر):\n\n"
+    
+    if total == 0:
+        txt += "هنوز کاربری ثبت نشده."
+    else:
+        for i, u in enumerate(users[:10], 1):
+            name = (u["first_name"] + " " + u["last_name"]).strip()
+            if not name:
+                name = "بی‌نام"
+            uname = "@" + u["username"] if u["username"] else "ندارد"
+            first = to_jalali_str(u["first_seen"])
+            last = to_jalali_str(u["last_seen"])
+            txt += str(i) + "️⃣ " + name + "\n"
+            txt += "   🆔 " + uname + " | `" + str(u["user_id"]) + "`\n"
+            txt += "   🕐 اولین: " + first + "\n"
+            txt += "   🕐 آخرین: " + last + "\n\n"
+        
+        if total > 10:
+            txt += "... و " + str(total - 10) + " نفر دیگر"
+    
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="🔄 بروزرسانی", callback_data="user_details"))
+    kb.row(InlineKeyboardButton(text="🔙 بازگشت", callback_data="back_to_manage"))
+    
+    await callback.message.edit_text(txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb.as_markup())
+    await callback.answer()
+
+@dp.callback_query(F.data == "back_to_manage")
+async def back_to_manage(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("دسترسی غیرمجاز", show_alert=True)
+        return
+    v2ray_count = len(get_from_db("v2ray"))
+    proxy_count = len(get_from_db("proxy"))
+    nepster_count = len(get_from_db("nepster"))
+    total = v2ray_count + proxy_count + nepster_count
+    user_count = len(get_users_from_db())
+    
+    txt = ("🛠 **پنل مدیریت**\n\n"
+           "🟢 V2Ray: " + str(v2ray_count) + " عدد\n"
+           "🔵 پروکسی: " + str(proxy_count) + " عدد\n"
+           "🟣 نپستر: " + str(nepster_count) + " عدد\n"
+           "📊 کل: " + str(total) + "\n"
+           "👥 کاربران: " + str(user_count) + " نفر")
+    
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="🗑 حذف همه V2Ray", callback_data="del_v2ray"))
+    kb.row(InlineKeyboardButton(text="🗑 حذف همه پروکسی", callback_data="del_proxy"))
+    kb.row(InlineKeyboardButton(text="🗑 حذف همه نپستر", callback_data="del_nepster"))
+    kb.row(InlineKeyboardButton(text="💣 حذف همه چیز", callback_data="del_all"))
+    kb.row(InlineKeyboardButton(text="📋 جزئیات کاربران", callback_data="user_details"))
+    kb.row(InlineKeyboardButton(text="❌ خروج", callback_data="manage_exit"))
+    
+    await callback.message.edit_text(txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb.as_markup())
     await callback.answer()
 
 @dp.callback_query(F.data == "del_v2ray")
@@ -373,23 +498,6 @@ async def del_all(callback: types.CallbackQuery):
     delete_from_db(filter_type="all")
     await callback.message.edit_text("✅ همه " + str(total) + " مورد حذف شد!", parse_mode=ParseMode.MARKDOWN)
     await callback.answer()
-    # ============ STATS ============
-@dp.message(Command("stats"))
-async def cmd_stats(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    v2ray_count = len(get_from_db("v2ray"))
-    proxy_count = len(get_from_db("proxy"))
-    nepster_count = len(get_from_db("nepster"))
-    total = v2ray_count + proxy_count + nepster_count
-    
-    txt = ("📊 **آمار ربات**\n\n"
-           "🟢 V2Ray: " + str(v2ray_count) + " عدد\n"
-           "🔵 پروکسی: " + str(proxy_count) + " عدد\n"
-           "🟣 نپستر: " + str(nepster_count) + " عدد\n"
-           "📦 کل: " + str(total))
-    
-    await message.answer(txt, parse_mode=ParseMode.MARKDOWN)
     # ============ SUPPORT ============
 @dp.message(F.text == "Support")
 async def support_start(message: Message, state: FSMContext):
@@ -486,7 +594,6 @@ async def main():
     init_database()
     
     if WEBHOOK_URL:
-        # WEBHOOK MODE
         from aiogram.webhook.aiohttp_server import SimpleRequestHandler
         
         webhook_path = "/webhook"
@@ -511,7 +618,6 @@ async def main():
         
         await asyncio.Event().wait()
     else:
-        # POLLING MODE (fallback)
         def run_health():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
