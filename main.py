@@ -35,6 +35,7 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 PORT = int(os.getenv("PORT", "8080"))
 DB_URL = os.getenv("DB_URL")
 DB_TOKEN = os.getenv("DB_TOKEN")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")
 
 if DB_URL and DB_URL.startswith("libsql://"):
     DB_URL = DB_URL.replace("libsql://", "https://")
@@ -158,20 +159,6 @@ def random_name(length=6):
 # ============ HEALTH CHECK ============
 async def health_check(request):
     return web.Response(text="OK")
-
-async def start_health_server():
-    app = web.Application()
-    app.router.add_get("/", health_check)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", PORT)
-    await site.start()
-
-def run_health_server():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(start_health_server())
-    loop.run_forever()
 
 # ============ DETECTION ============
 def detect_type(text: str) -> str:
@@ -464,20 +451,16 @@ async def send_nepster(message: Message, item: Dict):
     if item.get("file_id"):
         new_name = item.get('file_name', 'config.npvt')
         try:
-            # دانلود فایل
             file_data = await bot.download(item["file_id"])
-            # ذخیره موقت با اسم جدید
             with tempfile.NamedTemporaryFile(delete=False, suffix=".npvt") as tmp:
                 tmp.write(file_data.read())
                 tmp_path = tmp.name
-            # ارسال با اسم جدید
             await bot.send_document(
                 chat_id=message.chat.id,
                 document=FSInputFile(tmp_path, filename=new_name),
                 caption="🟣 <b>نپستر</b>\n📄 " + html.escape(new_name),
                 parse_mode=ParseMode.HTML
             )
-            # حذف فایل موقت
             os.remove(tmp_path)
         except Exception as e:
             logger.error(f"❌ Nepster send error: {e}")
@@ -488,13 +471,41 @@ async def send_nepster(message: Message, item: Dict):
             parse_mode=ParseMode.HTML
         )
 
-# ============ MAIN ============
+# ============ MAIN (WEBHOOK) ============
 async def main():
     logger.info("🚀 Starting bot...")
     init_database()
-    Thread(target=run_health_server, daemon=True).start()
-    logger.info("✅ Bot ready!")
-    await dp.start_polling(bot, allowed_updates=["message", "channel_post", "callback_query"])
+    
+    if WEBHOOK_URL:
+        # WEBHOOK MODE
+        from aiogram.webhook.aiohttp_server import SimpleRequestHandler
+        
+        webhook_path = "/webhook"
+        webhook_full_url = WEBHOOK_URL + webhook_path
+        
+        await bot.delete_webhook()
+        await bot.set_webhook(webhook_full_url, allowed_updates=["message", "channel_post", "callback_query"])
+        logger.info("✅ Webhook set to: " + webhook_full_url)
+        
+        app = web.Application()
+        app.router.add_get("/", health_check)
+        
+        handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
+        handler.register(app, path=webhook_path)
+        
+        logger.info("🚀 Webhook server starting on port " + str(PORT))
+        
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "0.0.0.0", PORT)
+        await site.start()
+        
+        await asyncio.Event().wait()
+    else:
+        # POLLING MODE (fallback)
+        Thread(target=run_health_server, daemon=True).start()
+        logger.info("✅ Bot ready!")
+        await dp.start_polling(bot, allowed_updates=["message", "channel_post", "callback_query"])
 
 if __name__ == "__main__":
     asyncio.run(main())
