@@ -88,7 +88,7 @@ def init_database():
                 file_name TEXT
             )
         """)
-        # اضافه کردن جدول کاربران
+        # جدول آمار کاربران
         db_query("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -154,7 +154,7 @@ def delete_from_db(db_id: int = None, filter_type: str = None):
     except Exception as e:
         logger.error(f"❌ DB delete error: {e}")
 
-# ----- توابع مدیریت کاربران -----
+# ============ USER STATS DB ============
 def save_user(user_id: int, full_name: str, username: str, join_date: datetime):
     try:
         existing = db_query("SELECT user_id FROM users WHERE user_id = ?", [user_id])
@@ -193,7 +193,6 @@ def get_all_users() -> List[Dict]:
     except Exception as e:
         logger.error(f"❌ DB get_all_users error: {e}")
         return []
-# -------------------------------
 
 # ============ JALALI HELPER ============
 def to_jalali(dt: datetime) -> str:
@@ -326,7 +325,6 @@ async def cmd_start(message: Message):
     user = message.from_user
     user_link = "[" + user.full_name + "](tg://user?id=" + str(user.id) + ")"
     
-    # ذخیره کاربر در دیتابیس در صورت استارت کردن
     save_user(
         user_id=user.id,
         full_name=user.full_name or "",
@@ -386,7 +384,7 @@ async def cmd_manage(message: Message, state: FSMContext):
     txt = "🛠 **پنل مدیریت**\n\n🟢 V2Ray: " + str(v2ray_count) + " عدد\n🔵 پروکسی: " + str(proxy_count) + " عدد\n🟣 نپستر: " + str(nepster_count) + " عدد\n📊 کل: " + str(total)
     
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="👥 آمار کاربران", callback_data="stats_users")) # دکمه جدید آمار
+    kb.row(InlineKeyboardButton(text="👥 آمار کاربران", callback_data="stats_users"))
     kb.row(InlineKeyboardButton(text="🗑 حذف همه V2Ray", callback_data="del_v2ray"))
     kb.row(InlineKeyboardButton(text="🗑 حذف همه پروکسی", callback_data="del_proxy"))
     kb.row(InlineKeyboardButton(text="🗑 حذف همه نپستر", callback_data="del_nepster"))
@@ -455,7 +453,6 @@ async def stats_details(callback: types.CallbackQuery):
         
         line = f"👤 {i}. {name} | 🆔 `{uid}`\n🔗 {uname} | 🕒 {j_date}\n\n"
         
-        # مدیریت محدودیت طول پیام در تلگرام
         if len(text) + len(line) > 4000:
             messages_to_send.append(text)
             text = line
@@ -554,4 +551,6 @@ async def support_receive_message(message: Message, state: FSMContext):
     await state.clear()
 
 # ============ SEND FUNCTIONS ============
-async def send_v2ray
+async def send_v2ray(message: Message, item: Dict):
+    lines = [line.strip() for line in item["text"].split('\n') if line.strip()]
+    config_text = '\n'.join(lin
