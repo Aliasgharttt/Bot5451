@@ -355,7 +355,6 @@ async def get_nepster(message: Message):
 PAGE_SIZE = 10
 
 def build_page_keyboard(manage_type: str, current_page: int, total_pages: int):
-    """دکمه‌های صفحه‌بندی"""
     builder = InlineKeyboardBuilder()
     row = []
     if current_page > 0:
@@ -369,7 +368,6 @@ def build_page_keyboard(manage_type: str, current_page: int, total_pages: int):
     return builder.as_markup()
 
 async def show_page(callback: types.CallbackQuery, state: FSMContext, manage_type: str, page: int):
-    """نمایش یک صفحه از لیست"""
     items = get_from_db(manage_type)
     total = len(items)
     total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
@@ -387,16 +385,15 @@ async def show_page(callback: types.CallbackQuery, state: FSMContext, manage_typ
         if manage_type == "nepster":
             text += f"{i}️⃣ {item.get('file_name', 'Unknown')}\n"
         else:
-            text += f"{i}️⃣ {item['text'][:70].replace(chr(10), ' ')}...\n"
+            short = item['text'][:70].replace('\n', ' ')
+            text += f"{i}️⃣ {short}...\n"
         text += f"   📅 {to_jalali(item['date'])}\n\n"
     text += "شماره (۳) | چندتایی (۱,۴,۷) | بازه (۱-۹) | all"
     
     await state.update_data(manage_type=manage_type, manage_items=items, manage_page=page)
     await state.set_state(ManageState.waiting_for_delete)
-    
     await callback.message.edit_text(text, parse_mode=ParseMode.MARKDOWN,
                                      reply_markup=build_page_keyboard(manage_type, page, total_pages))
-    await callback.answer()
 
 @dp.message(Command("manage"))
 async def cmd_manage(message: Message, state: FSMContext):
@@ -427,10 +424,11 @@ async def manage_show_list(callback: types.CallbackQuery, state: FSMContext):
         await callback.answer("دسترسی غیرمجاز", show_alert=True)
         return
     type_map = {"manage_v2ray": "v2ray", "manage_proxy": "proxy", "manage_nepster": "nepster"}
-    await show_page(callback, state, type_map[callback.data], 0)
+    manage_type = type_map[callback.data]
+    await show_page(callback, state, manage_type, 0)
 
 @dp.callback_query(F.data.startswith("page_"))
-async def manage_page_change(callback: types.CallbackQuery, state: FSMContext):
+async def page_navigation(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.id != ADMIN_ID:
         await callback.answer("دسترسی غیرمجاز", show_alert=True)
         return
@@ -488,7 +486,7 @@ async def manage_delete(message: Message, state: FSMContext):
     items = get_from_db(manage_type)
     total = len(items)
     total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
-    new_page = min(page, total_pages - 1)
+    new_page = min(page, total_pages - 1) if total > 0 else 0
     
     if total == 0:
         await state.clear()
@@ -508,7 +506,8 @@ async def manage_delete(message: Message, state: FSMContext):
         if manage_type == "nepster":
             txt += f"{i}️⃣ {item.get('file_name', 'Unknown')}\n"
         else:
-            txt += f"{i}️⃣ {item['text'][:70].replace(chr(10), ' ')}...\n"
+            short = item['text'][:70].replace('\n', ' ')
+            txt += f"{i}️⃣ {short}...\n"
         txt += f"   📅 {to_jalali(item['date'])}\n\n"
     txt += "شماره (۳) | چندتایی (۱,۴,۷) | بازه (۱-۹) | all"
     
@@ -571,4 +570,4 @@ async def send_proxy(message: Message, item: Dict):
                 link = urls[0]
             break
     if link:
-        await 
+        await m
