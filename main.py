@@ -553,4 +553,3 @@ async def support_receive_message(message: Message, state: FSMContext):
 # ============ SEND FUNCTIONS ============
 async def send_v2ray(message: Message, item: Dict):
     lines = [line.strip() for line in item["text"].split('\n') if line.strip()]
-    config_text = '\n'.join(lin
