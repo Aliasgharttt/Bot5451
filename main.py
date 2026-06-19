@@ -46,9 +46,6 @@ dp = Dispatcher(storage=storage)
 class SupportState(StatesGroup):
     waiting_for_message = State()
 
-class ManageState(StatesGroup):
-    waiting_for_delete = State()
-
 # ============ DATABASE ============
 def db_query(sql: str, params: List = None):
     try:
@@ -280,23 +277,6 @@ def get_main_menu():
     )
     return builder.as_markup(resize_keyboard=True)
 
-def get_manage_menu():
-    v2ray_count = len(get_from_db("v2ray"))
-    proxy_count = len(get_from_db("proxy"))
-    nepster_count = len(get_from_db("nepster"))
-    builder = InlineKeyboardBuilder()
-    builder.row(
-        InlineKeyboardButton(text="🟢 V2Ray (" + str(v2ray_count) + ")", callback_data="manage_v2ray"),
-        InlineKeyboardButton(text="🔵 Proxy (" + str(proxy_count) + ")", callback_data="manage_proxy")
-    )
-    builder.row(
-        InlineKeyboardButton(text="🟣 NPT (" + str(nepster_count) + ")", callback_data="manage_nepster")
-    )
-    builder.row(
-        InlineKeyboardButton(text="❌ خروج", callback_data="manage_exit")
-    )
-    return builder.as_markup()
-
 # ============ HANDLERS ============
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
@@ -349,123 +329,62 @@ async def cmd_manage(message: Message, state: FSMContext):
     proxy_count = len(get_from_db("proxy"))
     nepster_count = len(get_from_db("nepster"))
     total = v2ray_count + proxy_count + nepster_count
-    txt = "🛠 **پنل مدیریت**\n\n🟢 V2Ray: " + str(v2ray_count) + "\n🔵 پروکسی: " + str(proxy_count) + "\n🟣 نپستر: " + str(nepster_count) + "\n📊 کل: " + str(total)
-    await message.answer(txt, parse_mode=ParseMode.MARKDOWN, reply_markup=get_manage_menu())
+    
+    txt = "🛠 **پنل مدیریت**\n\n🟢 V2Ray: " + str(v2ray_count) + " عدد\n🔵 پروکسی: " + str(proxy_count) + " عدد\n🟣 نپستر: " + str(nepster_count) + " عدد\n📊 کل: " + str(total)
+    
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="🗑 حذف همه V2Ray", callback_data="del_v2ray"))
+    kb.row(InlineKeyboardButton(text="🗑 حذف همه پروکسی", callback_data="del_proxy"))
+    kb.row(InlineKeyboardButton(text="🗑 حذف همه نپستر", callback_data="del_nepster"))
+    kb.row(InlineKeyboardButton(text="💣 حذف همه چیز", callback_data="del_all"))
+    kb.row(InlineKeyboardButton(text="❌ خروج", callback_data="manage_exit"))
+    
+    await message.answer(txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb.as_markup())
 
 @dp.callback_query(F.data == "manage_exit")
-async def manage_exit(callback: types.CallbackQuery, state: FSMContext):
-    await state.clear()
+async def manage_exit(callback: types.CallbackQuery):
     await callback.message.delete()
     await callback.answer()
 
-@dp.callback_query(F.data.in_(["manage_v2ray", "manage_proxy", "manage_nepster"]))
-async def manage_show_list(callback: types.CallbackQuery, state: FSMContext):
+@dp.callback_query(F.data == "del_v2ray")
+async def del_v2ray(callback: types.CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
         await callback.answer("دسترسی غیرمجاز", show_alert=True)
         return
-    type_map = {"manage_v2ray": ("v2ray", "🟢 V2Ray"), "manage_proxy": ("proxy", "🔵 پروکسی"), "manage_nepster": ("nepster", "🟣 نپستر")}
-    filter_type, title = type_map[callback.data]
-    items = get_from_db(filter_type)
-    if not items:
-        await callback.answer(title + " خالیه", show_alert=True)
-        return
-    await state.update_data(manage_type=filter_type, manage_items=items, manage_offset=0)
-    await state.set_state(ManageState.waiting_for_delete)
-    await show_chunk(callback.message, state, edit=True)
-
-async def show_chunk(message: Message, state: FSMContext, edit: bool = False):
-    data = await state.get_data()
-    items = data.get("manage_items", [])
-    manage_type = data.get("manage_type", "")
-    offset = data.get("manage_offset", 0)
-    total = len(items)
-    chunk_size = 10
-    start = offset
-    end = min(offset + chunk_size, total)
-    chunk_items = items[start:end]
-    names = {"v2ray": "🟢 V2Ray", "proxy": "🔵 پروکسی", "nepster": "🟣 نپستر"}
-    title = names.get(manage_type, "آیتم‌ها")
-    txt = title + " (" + str(start + 1) + "-" + str(end) + " از " + str(total) + "):\n\n"
-    for i, item in enumerate(chunk_items, start + 1):
-        if manage_type == "nepster":
-            txt = txt + str(i) + "️⃣ " + str(item.get('file_name', 'Unknown')) + "\n"
-        elif manage_type == "proxy":
-            # فقط شماره و تاریخ/ساعت، بدون لینک
-            txt = txt + str(i) + "️⃣ " + "پروکسی MTProto" + "\n"
-        else:
-            short = str(item['text'][:70]).replace('\n', ' ')
-            txt = txt + str(i) + "️⃣ " + short + "...\n"
-        txt = txt + "   📅 " + to_jalali(item['date']) + "\n\n"
-    txt = txt + "شماره (۳) | چندتایی (۱,۴,۷) | بازه (۱-۹) | all"
-    kb = InlineKeyboardBuilder()
-    if end < total:
-        kb.row(InlineKeyboardButton(text="⬇️ بعدی (" + str(end + 1) + "-" + str(min(end + chunk_size, total)) + ")", callback_data="next_" + manage_type + "_" + str(end)))
-    kb.row(InlineKeyboardButton(text="❌ خروج", callback_data="manage_exit"))
-    if edit:
-        await message.edit_text(txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb.as_markup())
-    else:
-        await message.answer(txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb.as_markup())
-
-@dp.callback_query(F.data.startswith("next_"))
-async def next_page(callback: types.CallbackQuery, state: FSMContext):
-    if callback.from_user.id != ADMIN_ID:
-        await callback.answer("دسترسی غیرمجاز", show_alert=True)
-        return
-    parts = callback.data.split("_")
-    manage_type = parts[1]
-    new_offset = int(parts[2])
-    await state.update_data(manage_offset=new_offset)
-    await show_chunk(callback.message, state, edit=True)
+    count = len(get_from_db("v2ray"))
+    delete_from_db(filter_type="v2ray")
+    await callback.message.edit_text("✅ " + str(count) + " V2Ray حذف شد!", parse_mode=ParseMode.MARKDOWN)
     await callback.answer()
 
-@dp.message(ManageState.waiting_for_delete)
-async def manage_delete(message: Message, state: FSMContext):
-    if message.text == "برگشت":
-        await state.clear()
-        return await cmd_manage(message, state)
-    
-    data = await state.get_data()
-    items = data.get("manage_items", [])
-    manage_type = data.get("manage_type", "")
-    
-    if message.text.lower() == "all":
-        delete_from_db(filter_type=manage_type)
-        await message.answer("✅ همه " + str(len(items)) + " مورد حذف شدند!")
-        await state.clear()
-        return await cmd_manage(message, state)
-    
-    text = message.text.strip()
-    indices = set()
-    
-    try:
-        if '-' in text and ',' not in text:
-            start, end = text.split('-')
-            for i in range(int(start), int(end) + 1):
-                indices.add(i - 1)
-        elif ',' in text:
-            for part in text.split(','):
-                indices.add(int(part.strip()) - 1)
-        else:
-            indices.add(int(text) - 1)
-    except ValueError:
-        return await message.answer("❌ فرمت اشتباه. مثال: ۳ یا ۱,۴,۷ یا ۱-۹ یا all")
-    
-    invalid = [i + 1 for i in indices if i < 0 or i >= len(items)]
-    if invalid:
-        return await message.answer("❌ اعداد " + str(invalid) + " خارج از محدوده (۱ تا " + str(len(items)) + ")")
-    
-    for index in sorted(indices, reverse=True):
-        delete_from_db(db_id=items[index]["db_id"])
-    
-    await message.answer("✅ " + str(len(indices)) + " مورد حذف شد!")
-    
-    items = get_from_db(manage_type)
-    if not items:
-        await state.clear()
-        return await cmd_manage(message, state)
-    
-    await state.update_data(manage_items=items, manage_offset=0)
-    await show_chunk(message, state, edit=False)
+@dp.callback_query(F.data == "del_proxy")
+async def del_proxy(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("دسترسی غیرمجاز", show_alert=True)
+        return
+    count = len(get_from_db("proxy"))
+    delete_from_db(filter_type="proxy")
+    await callback.message.edit_text("✅ " + str(count) + " پروکسی حذف شد!", parse_mode=ParseMode.MARKDOWN)
+    await callback.answer()
+
+@dp.callback_query(F.data == "del_nepster")
+async def del_nepster(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("دسترسی غیرمجاز", show_alert=True)
+        return
+    count = len(get_from_db("nepster"))
+    delete_from_db(filter_type="nepster")
+    await callback.message.edit_text("✅ " + str(count) + " نپستر حذف شد!", parse_mode=ParseMode.MARKDOWN)
+    await callback.answer()
+
+@dp.callback_query(F.data == "del_all")
+async def del_all(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("دسترسی غیرمجاز", show_alert=True)
+        return
+    total = len(get_from_db("all"))
+    delete_from_db(filter_type="all")
+    await callback.message.edit_text("✅ همه " + str(total) + " مورد حذف شد!", parse_mode=ParseMode.MARKDOWN)
+    await callback.answer()
 
 # ============ SUPPORT ============
 @dp.message(F.text == "Support")
@@ -560,4 +479,4 @@ async def main():
     await dp.start_polling(bot, allowed_updates=["message", "channel_post", "callback_query"])
 
 if __name__ == "__main__":
-    asyncio.run(main())"
+    asyncio.run(main())
