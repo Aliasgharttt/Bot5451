@@ -392,7 +392,7 @@ async def manage_show_list(callback: types.CallbackQuery, state: FSMContext):
             txt = txt + "   📅 " + to_jalali(item['date']) + "\n\n"
         
         await callback.message.answer(txt, parse_mode=ParseMode.MARKDOWN)
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(2)
     
     await callback.message.answer("شماره (۳) | چندتایی (۱,۴,۷) | بازه (۱-۹) | all")
     await callback.answer()
