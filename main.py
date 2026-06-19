@@ -363,38 +363,56 @@ async def manage_show_list(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.id != ADMIN_ID:
         await callback.answer("دسترسی غیرمجاز", show_alert=True)
         return
-    type_map = {
-        "manage_v2ray": ("v2ray", "🟢 V2Ray"),
-        "manage_proxy": ("proxy", "🔵 پروکسی"),
-        "manage_nepster": ("nepster", "🟣 نپستر")
-    }
+    type_map = {"manage_v2ray": ("v2ray", "🟢 V2Ray"), "manage_proxy": ("proxy", "🔵 پروکسی"), "manage_nepster": ("nepster", "🟣 نپستر")}
     filter_type, title = type_map[callback.data]
     items = get_from_db(filter_type)
     if not items:
         await callback.answer(title + " خالیه", show_alert=True)
         return
-    await state.update_data(manage_type=filter_type, manage_items=items)
+    await state.update_data(manage_type=filter_type, manage_items=items, manage_offset=0)
     await state.set_state(ManageState.waiting_for_delete)
-    
-    chunk_size = 10
+    await show_chunk(callback.message, state, edit=True)
+
+async def show_chunk(message: Message, state: FSMContext, edit: bool = False):
+    data = await state.get_data()
+    items = data.get("manage_items", [])
+    manage_type = data.get("manage_type", "")
+    offset = data.get("manage_offset", 0)
     total = len(items)
-    for chunk_start in range(0, total, chunk_size):
-        chunk_end = min(chunk_start + chunk_size, total)
-        chunk_items = items[chunk_start:chunk_end]
-        
-        txt = title + " (" + str(chunk_start + 1) + "-" + str(chunk_end) + " از " + str(total) + "):\n\n"
-        for i, item in enumerate(chunk_items, chunk_start + 1):
-            if filter_type == "nepster":
-                txt = txt + str(i) + "️⃣ " + str(item.get('file_name', 'Unknown')) + "\n"
-            else:
-                short = str(item['text'][:70]).replace('\n', ' ')
-                txt = txt + str(i) + "️⃣ " + short + "...\n"
-            txt = txt + "   📅 " + to_jalali(item['date']) + "\n\n"
-        
-        await callback.message.answer(txt, parse_mode=ParseMode.MARKDOWN)
-        await asyncio.sleep(2)
-    
-    await callback.message.answer("شماره (۳) | چندتایی (۱,۴,۷) | بازه (۱-۹) | all")
+    chunk_size = 10
+    start = offset
+    end = min(offset + chunk_size, total)
+    chunk_items = items[start:end]
+    names = {"v2ray": "🟢 V2Ray", "proxy": "🔵 پروکسی", "nepster": "🟣 نپستر"}
+    title = names.get(manage_type, "آیتم‌ها")
+    txt = title + " (" + str(start + 1) + "-" + str(end) + " از " + str(total) + "):\n\n"
+    for i, item in enumerate(chunk_items, start + 1):
+        if manage_type == "nepster":
+            txt = txt + str(i) + "️⃣ " + str(item.get('file_name', 'Unknown')) + "\n"
+        else:
+            short = str(item['text'][:70]).replace('\n', ' ')
+            txt = txt + str(i) + "️⃣ " + short + "...\n"
+        txt = txt + "   📅 " + to_jalali(item['date']) + "\n\n"
+    txt = txt + "شماره (۳) | چندتایی (۱,۴,۷) | بازه (۱-۹) | all"
+    kb = InlineKeyboardBuilder()
+    if end < total:
+        kb.row(InlineKeyboardButton(text="⬇️ بعدی (" + str(end + 1) + "-" + str(min(end + chunk_size, total)) + ")", callback_data="next_" + manage_type + "_" + str(end)))
+    kb.row(InlineKeyboardButton(text="❌ خروج", callback_data="manage_exit"))
+    if edit:
+        await message.edit_text(txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb.as_markup())
+    else:
+        await message.answer(txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb.as_markup())
+
+@dp.callback_query(F.data.startswith("next_"))
+async def next_page(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("دسترسی غیرمجاز", show_alert=True)
+        return
+    parts = callback.data.split("_")
+    manage_type = parts[1]
+    new_offset = int(parts[2])
+    await state.update_data(manage_offset=new_offset)
+    await show_chunk(callback.message, state, edit=True)
     await callback.answer()
 
 @dp.message(ManageState.waiting_for_delete)
@@ -443,18 +461,8 @@ async def manage_delete(message: Message, state: FSMContext):
         await state.clear()
         return await cmd_manage(message, state)
     
-    await state.update_data(manage_items=items)
-    type_names = {"v2ray": "🟢 V2Ray", "proxy": "🔵 پروکسی", "nepster": "🟣 نپستر"}
-    txt = type_names.get(manage_type, "") + " ها:\n\n"
-    for i, item in enumerate(items, 1):
-        if manage_type == "nepster":
-            txt = txt + str(i) + "️⃣ " + str(item.get('file_name', 'Unknown')) + "\n"
-        else:
-            short = str(item['text'][:70]).replace('\n', ' ')
-            txt = txt + str(i) + "️⃣ " + short + "...\n"
-        txt = txt + "   📅 " + to_jalali(item['date']) + "\n\n"
-    txt = txt + "شماره (۳) | چندتایی (۱,۴,۷) | بازه (۱-۹) | all"
-    await message.answer(txt, parse_mode=ParseMode.MARKDOWN)
+    await state.update_data(manage_items=items, manage_offset=0)
+    await show_chunk(message, state, edit=False)
 
 # ============ SUPPORT ============
 @dp.message(F.text == "Support")
