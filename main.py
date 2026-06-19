@@ -8,6 +8,7 @@ import requests
 import jdatetime
 import pytz
 import html
+import string
 from datetime import datetime
 from threading import Thread
 from typing import List, Dict
@@ -149,6 +150,10 @@ def to_jalali(dt: datetime) -> str:
     jd = jdatetime.datetime.fromgregorian(datetime=dt_iran)
     return jd.strftime('%Y/%m/%d %H:%M')
 
+def random_name(length=6):
+    chars = string.ascii_letters + string.digits
+    return ''.join(random.choices(chars, k=length)) + ".npvt"
+
 # ============ HEALTH CHECK ============
 async def health_check(request):
     return web.Response(text="OK")
@@ -193,7 +198,7 @@ async def handle_channel_post(message: Message):
                 "date": message.date,
                 "type": "nepster",
                 "file_id": message.document.file_id,
-                "file_name": file_name
+                "file_name": random_name()
             })
             return
     
