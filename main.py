@@ -553,7 +553,15 @@ async def send_proxy(message: Message, item: Dict):
 
 async def send_nepster(message: Message, item: Dict):
     if item.get("file_id"):
+        caption_text = "🟣 <b>نپستر</b>\n📄 " + html.escape(item.get('file_name', 'config.npvt'))
         await bot.send_document(
             chat_id=message.chat.id,
             document=item["file_id"],
-            caption=f"🟣 <b>نپستر</b>\n📄 {h
+            caption=caption_text,
+            parse_mode=ParseMode.HTML
+        )
+    else:
+        await message.answer(
+            "🟣 <b>نپستر</b>\n\n❌ فایل در دسترس نیست.",
+            parse_mode=ParseMode.HTML
+        )
