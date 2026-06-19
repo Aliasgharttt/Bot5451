@@ -365,9 +365,7 @@ async def manage_show_list(callback: types.CallbackQuery, state: FSMContext):
         return
     type_map = {"manage_v2ray": ("v2ray", "🟢 V2Ray"), "manage_proxy": ("proxy", "🔵 پروکسی"), "manage_nepster": ("nepster", "🟣 نپستر")}
     filter_type, title = type_map[callback.data]
-    logger.info("MANAGE SHOW LIST: type=" + filter_type)
     items = get_from_db(filter_type)
-    logger.info("MANAGE SHOW LIST: count=" + str(len(items)))
     if not items:
         await callback.answer(title + " خالیه", show_alert=True)
         return
@@ -382,7 +380,7 @@ async def show_chunk(message: Message, state: FSMContext, edit: bool = False):
     offset = data.get("manage_offset", 0)
     total = len(items)
     
-    # 🔥 برای پروکسی ۵ تا ۵ تا، برای بقیه ۱۰ تا ۱۰ تا
+    # 🔥 پروکسی لینک‌های بلندی دارد، برای جلوگیری از خطای محدودیت کاراکتر ۵ تایی نمایش داده می‌شود
     if manage_type == "proxy":
         chunk_size = 5
     else:
@@ -562,4 +560,4 @@ async def main():
     init_database()
     Thread(target=run_health_server, daemon=True).start()
     logger.info("✅ Bot ready!")
-    await dp.start_p
+    await dp.start_polling(bot, allowed_updates=["message", "channel_post", "callback_query"])
