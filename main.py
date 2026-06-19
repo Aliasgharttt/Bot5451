@@ -451,9 +451,130 @@ async def back_to_manage(callback: types.CallbackQuery, state: FSMContext):
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="🗑 حذف همه V2Ray", callback_data="del_v2ray"))
     kb.row(InlineKeyboardButton(text="🗑 حذف همه پروکسی", callback_data="del_proxy"))
+# ============ MANAGE PANEL ============
+@dp.message(Command("manage"))
+async def cmd_manage(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
+    await state.clear()
+    v2ray_count = len(get_from_db("v2ray"))
+    proxy_count = len(get_from_db("proxy"))
+    nepster_count = len(get_from_db("nepster"))
+    total = v2ray_count + proxy_count + nepster_count
+    user_count = len(get_users_from_db())
+    
+    txt = ("🛠 **پنل مدیریت**\n\n"
+           "🟢 V2Ray: " + str(v2ray_count) + " عدد\n"
+           "🔵 پروکسی: " + str(proxy_count) + " عدد\n"
+           "🟣 نپستر: " + str(nepster_count) + " عدد\n"
+           "📊 کل: " + str(total) + "\n"
+           "👥 کاربران: " + str(user_count) + " نفر")
+    
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="🗑 حذف همه V2Ray", callback_data="del_v2ray"))
+    kb.row(InlineKeyboardButton(text="🗑 حذف همه پروکسی", callback_data="del_proxy"))
     kb.row(InlineKeyboardButton(text="🗑 حذف همه نپستر", callback_data="del_nepster"))
     kb.row(InlineKeyboardButton(text="💣 حذف همه چیز", callback_data="del_all"))
-    kb.row(InlineKeyboardButton(text="📋 جزئیات کاربران", callback_data="user_details"))
+    kb.row(InlineKeyboardButton(text="📊 آمار کاربران", callback_data="user_stats"))
+    kb.row(InlineKeyboardButton(text="❌ خروج", callback_data="manage_exit"))
+    
+    await message.answer(txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb.as_markup())
+
+@dp.callback_query(F.data == "manage_exit")
+async def manage_exit(callback: types.CallbackQuery):
+    await callback.message.delete()
+    await callback.answer()
+
+@dp.callback_query(F.data == "user_stats")
+async def user_stats(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("دسترسی غیرمجاز", show_alert=True)
+        return
+    users = get_users_from_db()
+    total = len(users)
+    
+    today = datetime.now().strftime('%Y-%m-%d')
+    today_users = [u for u in users if u["last_seen"].startswith(today)]
+    
+    txt = ("📊 **آمار کاربران**\n\n"
+           "👥 کل: " + str(total) + " نفر\n"
+           "🟢 امروز: " + str(len(today_users)) + " نفر\n\n"
+           "برای دیدن جزئیات، دکمه زیر را بزنید:")
+    
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="📋 جزئیات کاربران", callback_data="user_details_0"))
+    kb.row(InlineKeyboardButton(text="🔙 بازگشت", callback_data="back_to_manage"))
+    
+    await callback.message.edit_text(txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb.as_markup())
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("user_details_"))
+async def user_details_paginated(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("دسترسی غیرمجاز", show_alert=True)
+        return
+    page = int(callback.data.split("_")[-1])
+    users = get_users_from_db()
+    total = len(users)
+    per_page = 10
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = max(0, min(page, total_pages - 1))
+    
+    start = page * per_page
+    end = min(start + per_page, total)
+    page_users = users[start:end]
+    
+    txt = "📋 **کاربران** (صفحه " + str(page + 1) + " از " + str(total_pages) + "):\n\n"
+    
+    if total == 0:
+        txt += "هنوز کاربری ثبت نشده."
+    else:
+        for i, u in enumerate(page_users, start + 1):
+            name = (u["first_name"] + " " + u["last_name"]).strip()
+            if not name:
+                name = "بی‌نام"
+            uname = "@" + u["username"] if u["username"] else "ندارد"
+            first = to_jalali_str(u["first_seen"])
+            last = to_jalali_str(u["last_seen"])
+            txt += str(i) + "️⃣ " + name + "\n"
+            txt += "   🆔 " + uname + " | `" + str(u["user_id"]) + "`\n"
+            txt += "   🕐 اولین: " + first + "\n"
+            txt += "   🕐 آخرین: " + last + "\n\n"
+    
+    kb = InlineKeyboardBuilder()
+    if page > 0:
+        kb.row(InlineKeyboardButton(text="⬅️ قبلی", callback_data="user_details_" + str(page - 1)))
+    if page < total_pages - 1:
+        kb.row(InlineKeyboardButton(text="➡️ بعدی", callback_data="user_details_" + str(page + 1)))
+    kb.row(InlineKeyboardButton(text="🔙 بازگشت به آمار", callback_data="user_stats"))
+    
+    await callback.message.edit_text(txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb.as_markup())
+    await callback.answer()
+
+@dp.callback_query(F.data == "back_to_manage")
+async def back_to_manage(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("دسترسی غیرمجاز", show_alert=True)
+        return
+    v2ray_count = len(get_from_db("v2ray"))
+    proxy_count = len(get_from_db("proxy"))
+    nepster_count = len(get_from_db("nepster"))
+    total = v2ray_count + proxy_count + nepster_count
+    user_count = len(get_users_from_db())
+    
+    txt = ("🛠 **پنل مدیریت**\n\n"
+           "🟢 V2Ray: " + str(v2ray_count) + " عدد\n"
+           "🔵 پروکسی: " + str(proxy_count) + " عدد\n"
+           "🟣 نپستر: " + str(nepster_count) + " عدد\n"
+           "📊 کل: " + str(total) + "\n"
+           "👥 کاربران: " + str(user_count) + " نفر")
+    
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="🗑 حذف همه V2Ray", callback_data="del_v2ray"))
+    kb.row(InlineKeyboardButton(text="🗑 حذف همه پروکسی", callback_data="del_proxy"))
+    kb.row(InlineKeyboardButton(text="🗑 حذف همه نپستر", callback_data="del_nepster"))
+    kb.row(InlineKeyboardButton(text="💣 حذف همه چیز", callback_data="del_all"))
+    kb.row(InlineKeyboardButton(text="📊 آمار کاربران", callback_data="user_stats"))
     kb.row(InlineKeyboardButton(text="❌ خروج", callback_data="manage_exit"))
     
     await callback.message.edit_text(txt, parse_mode=ParseMode.MARKDOWN, reply_markup=kb.as_markup())
