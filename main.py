@@ -351,7 +351,64 @@ async def get_nepster(message: Message):
     item = random.choice(items)
     await send_nepster(message, item)
 
-# ============ MANAGE PANEL ============
+# ============ MANAGE PANEL (Paginated) ============
+PAGE_SIZE = 10
+
+def build_page_keyboard(manage_type: str, current_page: int, total_pages: int):
+    """Create inline keyboard with page navigation."""
+    builder = InlineKeyboardBuilder()
+    # First row: Prev / Page info / Next
+    row = []
+    if current_page > 0:
+        row.append(InlineKeyboardButton(text="⬅️", callback_data=f"manage_page_{manage_type}_{current_page - 1}"))
+    row.append(InlineKeyboardButton(text=f"{current_page + 1}/{total_pages}", callback_data="noop"))
+    if current_page < total_pages - 1:
+        row.append(InlineKeyboardButton(text="➡️", callback_data=f"manage_page_{manage_type}_{current_page + 1}"))
+    if row:
+        builder.row(*row)
+    builder.row(InlineKeyboardButton(text="❌ خروج", callback_data="manage_exit"))
+    return builder.as_markup()
+
+async def show_paginated_list(message_or_callback, state: FSMContext, manage_type: str, page: int):
+    """Display a page of items for the given manage_type."""
+    items = get_from_db(manage_type)
+    total = len(items)
+    total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+    page = max(0, min(page, total_pages - 1))  # clamp
+    
+    start_idx = page * PAGE_SIZE
+    end_idx = min(start_idx + PAGE_SIZE, total)
+    page_items = items[start_idx:end_idx]
+    
+    type_names = {"v2ray": "🟢 V2Ray", "proxy": "🔵 پروکسی", "nepster": "🟣 نپستر"}
+    title = type_names.get(manage_type, "آیتم‌ها")
+    
+    text = f"{title} (صفحه {page + 1} از {total_pages}):\n\n"
+    for i, item in enumerate(page_items, start_idx + 1):
+        if manage_type == "nepster":
+            text += f"{i}️⃣ {item.get('file_name', 'Unknown')}\n"
+        else:
+            short = item['text'][:70].replace('\n', ' ')
+            text += f"{i}️⃣ {short}...\n"
+        text += f"   📅 {to_jalali(item['date'])}\n\n"
+    text += "شماره (۳) | چندتایی (۱,۴,۷) | بازه (۱-۹) | all"
+    
+    # Save state: full items list, type, current page
+    await state.update_data(
+        manage_type=manage_type,
+        manage_items=items,  # full list for delete indexing
+        manage_page=page
+    )
+    await state.set_state(ManageState.waiting_for_delete)
+    
+    if isinstance(message_or_callback, types.CallbackQuery):
+        await message_or_callback.message.edit_text(text, parse_mode=ParseMode.MARKDOWN,
+                                                     reply_markup=build_page_keyboard(manage_type, page, total_pages))
+        await message_or_callback.answer()
+    else:
+        await message_or_callback.answer(text, parse_mode=ParseMode.MARKDOWN,
+                                         reply_markup=build_page_keyboard(manage_type, page, total_pages))
+
 @dp.message(Command("manage"))
 async def cmd_manage(message: Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
@@ -376,31 +433,32 @@ async def manage_exit(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.delete()
 
 @dp.callback_query(F.data.in_(["manage_v2ray", "manage_proxy", "manage_nepster"]))
-async def manage_show_list(callback: types.CallbackQuery, state: FSMContext):
+async def manage_initial_show(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.id != ADMIN_ID:
         await callback.answer("دسترسی غیرمجاز", show_alert=True)
         return
     type_map = {
-        "manage_v2ray": ("v2ray", "🟢 V2Ray"),
-        "manage_proxy": ("proxy", "🔵 پروکسی"),
-        "manage_nepster": ("nepster", "🟣 نپستر")
+        "manage_v2ray": "v2ray",
+        "manage_proxy": "proxy",
+        "manage_nepster": "nepster"
     }
-    filter_type, title = type_map[callback.data]
-    items = get_from_db(filter_type)
-    if not items:
-        await callback.answer(f"{title} خالیه", show_alert=True)
+    manage_type = type_map[callback.data]
+    await show_paginated_list(callback, state, manage_type, 0)
+
+@dp.callback_query(F.data.startswith("manage_page_"))
+async def manage_page_navigation(callback: types.CallbackQuery, state: FSMContext):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("دسترسی غیرمجاز", show_alert=True)
         return
-    await state.update_data(manage_type=filter_type, manage_items=items)
-    await state.set_state(ManageState.waiting_for_delete)
-    text = f"{title} ها:\n\n"
-    for i, item in enumerate(items, 1):
-        if filter_type == "nepster":
-            text += f"{i}️⃣ {item.get('file_name', 'Unknown')}\n"
-        else:
-            text += f"{i}️⃣ {item['text'][:70].replace(chr(10), ' ')}...\n"
-        text += f"   📅 {to_jalali(item['date'])}\n\n"
-    text += "شماره (۳) | چندتایی (۱,۴,۷) | بازه (۱-۹) | all"
-    await callback.message.edit_text(text, parse_mode=ParseMode.MARKDOWN)
+    parts = callback.data.split("_")
+    # format: manage_page_<type>_<page>
+    manage_type = parts[2]
+    page = int(parts[3])
+    await show_paginated_list(callback, state, manage_type, page)
+
+@dp.callback_query(F.data == "noop")
+async def noop(callback: types.CallbackQuery):
+    await callback.answer()
 
 @dp.message(ManageState.waiting_for_delete)
 async def manage_delete(message: Message, state: FSMContext):
@@ -411,6 +469,7 @@ async def manage_delete(message: Message, state: FSMContext):
     data = await state.get_data()
     items = data.get("manage_items", [])
     manage_type = data.get("manage_type", "")
+    page = data.get("manage_page", 0)
     
     if message.text.lower() == "all":
         delete_from_db(filter_type=manage_type)
@@ -443,22 +502,37 @@ async def manage_delete(message: Message, state: FSMContext):
     
     await message.answer(f"✅ {len(indices)} مورد حذف شد!")
     
+    # After deletion, refresh list and stay on the current page if possible
     items = get_from_db(manage_type)
-    if not items:
+    total = len(items)
+    total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
+    new_page = min(page, total_pages - 1)
+    
+    if total == 0:
         await state.clear()
         return await cmd_manage(message, state)
     
-    await state.update_data(manage_items=items)
+    await state.update_data(manage_items=items, manage_page=new_page)
+    # Show the current page again
+    start_idx = new_page * PAGE_SIZE
+    end_idx = min(start_idx + PAGE_SIZE, total)
+    page_items = items[start_idx:end_idx]
+    
     type_names = {"v2ray": "🟢 V2Ray", "proxy": "🔵 پروکسی", "nepster": "🟣 نپستر"}
-    txt = f"{type_names.get(manage_type, '')} ها:\n\n"
-    for i, item in enumerate(items, 1):
+    title = type_names.get(manage_type, "آیتم‌ها")
+    
+    txt = f"{title} (صفحه {new_page + 1} از {total_pages}):\n\n"
+    for i, item in enumerate(page_items, start_idx + 1):
         if manage_type == "nepster":
             txt += f"{i}️⃣ {item.get('file_name', 'Unknown')}\n"
         else:
-            txt += f"{i}️⃣ {item['text'][:70].replace(chr(10), ' ')}...\n"
+            short = item['text'][:70].replace('\n', ' ')
+            txt += f"{i}️⃣ {short}...\n"
         txt += f"   📅 {to_jalali(item['date'])}\n\n"
     txt += "شماره (۳) | چندتایی (۱,۴,۷) | بازه (۱-۹) | all"
-    await message.answer(txt, parse_mode=ParseMode.MARKDOWN)
+    
+    await message.answer(txt, parse_mode=ParseMode.MARKDOWN,
+                         reply_markup=build_page_keyboard(manage_type, new_page, total_pages))
 
 # ============ SUPPORT ============
 @dp.message(F.text == "Support")
@@ -490,62 +564,4 @@ async def support_receive_message(message: Message, state: FSMContext):
     )
     try:
         await bot.send_message(ADMIN_ID, info, parse_mode=ParseMode.MARKDOWN)
-        await message.answer("✅ ارسال شد.", reply_markup=get_main_menu())
-    except Exception as e:
-        await message.answer("❌ خطا.", reply_markup=get_main_menu())
-    await state.clear()
-
-# ============ SEND FUNCTIONS ============
-async def send_v2ray(message: Message, item: Dict):
-    lines = [line.strip() for line in item["text"].split('\n') if line.strip()]
-    config_text = '\n'.join(lines)
-    escaped = html.escape(config_text)
-    await message.answer(
-        f"🟢 <b>V2Ray</b>\n<pre>{escaped[:1000]}</pre>",
-        parse_mode=ParseMode.HTML,
-        disable_web_page_preview=True
-    )
-
-async def send_proxy(message: Message, item: Dict):
-    text = item["text"]
-    link = None
-    for line in text.split('\n'):
-        if 't.me/proxy' in line:
-            urls = re.findall(r'https?://t\.me/proxy\S+', line)
-            if urls:
-                link = urls[0]
-            break
-    if link:
-        await message.answer(
-            f"🔵 <b>MTProto</b>\n\n<a href='{html.escape(link)}'>⚡ کلیک کنید</a>",
-            parse_mode=ParseMode.HTML,
-            disable_web_page_preview=True
-        )
-    else:
-        await message.answer(
-            f"🔵 <b>پروکسی</b>\n\n{html.escape(text[:400])}",
-            parse_mode=ParseMode.HTML,
-            disable_web_page_preview=True
-        )
-
-async def send_nepster(message: Message, item: Dict):
-    if item.get("file_id"):
-        await bot.send_document(
-            chat_id=message.chat.id,
-            document=item["file_id"],
-            caption=f"🟣 <b>نپستر</b>\n📄 {html.escape(item.get('file_name', 'config.npvt'))}",
-            parse_mode=ParseMode.HTML
-        )
-    else:
-        await message.answer("🟣 <b>نپستر</b>\n\n❌ فایل در دسترس نیست.", parse_mode=ParseMode.HTML)
-
-# ============ MAIN ============
-async def main():
-    logger.info("🚀 Starting bot...")
-    init_database()
-    Thread(target=run_health_server, daemon=True).start()
-    logger.info("✅ Bot ready!")
-    await dp.start_polling(bot, allowed_updates=["message", "channel_post", "callback_query"])
-
-if __name__ == "__main__":
-    asyncio.run(main())
+        await message.answer("✅ ارسال شد.", reply_markup
