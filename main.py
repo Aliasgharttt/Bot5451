@@ -117,20 +117,22 @@ def save_to_db(item: Dict):
     except Exception as e:
         logger.error(f"❌ DB save error: {e}")
 
-def save_user(user_id: int, first_name: str, last_name: str, username: str):
+def save_user_to_db(user_id: int, first_name: str, last_name: str, username: str):
+    """Save or update user on /start"""
     try:
         now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        existing = db_query("SELECT * FROM users WHERE user_id = ?", [user_id])
-        if existing and "rows" in existing and len(existing["rows"]) > 0:
+        result = db_query("SELECT user_id FROM users WHERE user_id = ?", [user_id])
+        if result and "rows" in result and len(result["rows"]) > 0:
             db_query("UPDATE users SET last_seen = ?, first_name = ?, last_name = ?, username = ? WHERE user_id = ?",
-                     [now, first_name, last_name, username, user_id])
+                     [now, first_name or "", last_name or "", username or "", user_id])
         else:
             db_query("INSERT INTO users (user_id, first_name, last_name, username, first_seen, last_seen) VALUES (?, ?, ?, ?, ?, ?)",
-                     [user_id, first_name, last_name, username, now, now])
+                     [user_id, first_name or "", last_name or "", username or "", now, now])
     except Exception as e:
         logger.error(f"❌ User save error: {e}")
 
-def get_users():
+def get_users_from_db() -> List[Dict]:
+    """Get all users from database"""
     try:
         result = db_query("SELECT * FROM users ORDER BY last_seen DESC")
         users = []
@@ -194,6 +196,8 @@ def to_jalali(dt: datetime) -> str:
     return jd.strftime('%Y/%m/%d %H:%M')
 
 def to_jalali_str(date_str: str) -> str:
+    if not date_str:
+        return "نامشخص"
     try:
         dt = datetime.strptime(date_str, '%Y-%m-%d %H:%M:%S')
         return to_jalali(dt)
@@ -338,8 +342,8 @@ async def cmd_start(message: Message):
     user = message.from_user
     user_link = "[" + user.full_name + "](tg://user?id=" + str(user.id) + ")"
     
-    # Save user
-    save_user(user.id, user.first_name or "", user.last_name or "", user.username or "")
+    # Save user to database
+    save_user_to_db(user.id, user.first_name or "", user.last_name or "", user.username or "")
     
     await message.answer(
         "سلام " + user_link + " 👋 خوش آمدید!",
@@ -388,7 +392,7 @@ async def cmd_manage(message: Message, state: FSMContext):
     proxy_count = len(get_from_db("proxy"))
     nepster_count = len(get_from_db("nepster"))
     total = v2ray_count + proxy_count + nepster_count
-    user_count = len(get_users())
+    user_count = len(get_users_from_db())
     
     txt = ("🛠 **پنل مدیریت**\n\n"
            "🟢 V2Ray: " + str(v2ray_count) + " عدد\n"
@@ -417,28 +421,28 @@ async def user_details(callback: types.CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
         await callback.answer("دسترسی غیرمجاز", show_alert=True)
         return
-    users = get_users()
+    users = get_users_from_db()
     total = len(users)
     
     txt = "📋 **جزئیات کاربران** (" + str(total) + " نفر):\n\n"
     
     if total == 0:
-        txt = txt + "هنوز کاربری ثبت نشده."
+        txt += "هنوز کاربری ثبت نشده."
     else:
         for i, u in enumerate(users[:10], 1):
-            name = u["first_name"] + " " + u["last_name"]
-            if name.strip() == "":
+            name = (u["first_name"] + " " + u["last_name"]).strip()
+            if not name:
                 name = "بی‌نام"
             uname = "@" + u["username"] if u["username"] else "ندارد"
-            first = to_jalali_str(u["first_seen"]) if u["first_seen"] else "نامشخص"
-            last = to_jalali_str(u["last_seen"]) if u["last_seen"] else "نامشخص"
-            txt = txt + str(i) + "️⃣ " + name + "\n"
-            txt = txt + "   🆔 " + uname + " | `" + str(u["user_id"]) + "`\n"
-            txt = txt + "   🕐 اولین: " + first + "\n"
-            txt = txt + "   🕐 آخرین: " + last + "\n\n"
+            first = to_jalali_str(u["first_seen"])
+            last = to_jalali_str(u["last_seen"])
+            txt += str(i) + "️⃣ " + name + "\n"
+            txt += "   🆔 " + uname + " | `" + str(u["user_id"]) + "`\n"
+            txt += "   🕐 اولین: " + first + "\n"
+            txt += "   🕐 آخرین: " + last + "\n\n"
         
         if total > 10:
-            txt = txt + "... و " + str(total - 10) + " نفر دیگر"
+            txt += "... و " + str(total - 10) + " نفر دیگر"
     
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="🔄 بروزرسانی", callback_data="user_details"))
@@ -456,7 +460,7 @@ async def back_to_manage(callback: types.CallbackQuery, state: FSMContext):
     proxy_count = len(get_from_db("proxy"))
     nepster_count = len(get_from_db("nepster"))
     total = v2ray_count + proxy_count + nepster_count
-    user_count = len(get_users())
+    user_count = len(get_users_from_db())
     
     txt = ("🛠 **پنل مدیریت**\n\n"
            "🟢 V2Ray: " + str(v2ray_count) + " عدد\n"
@@ -545,6 +549,4 @@ async def support_receive_message(message: Message, state: FSMContext):
         "📝 " + message.text
     )
     try:
-        await bot.send_message(ADMIN_ID, info, parse_mode=ParseMode.MARKDOWN)
-        await message.answer("✅ ارسال شد.", reply_markup=get_main_menu())
-   
+        await bot.send_
