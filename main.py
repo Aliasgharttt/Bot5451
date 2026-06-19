@@ -187,6 +187,7 @@ async def handle_channel_post(message: Message):
     if message.chat.id != CHANNEL_ID:
         return
     
+    # 1. NEPSTER file (.npvt)
     if message.document:
         file_name = message.document.file_name or ""
         if is_npvt_file(file_name):
@@ -206,15 +207,18 @@ async def handle_channel_post(message: Message):
     if not text and not entities:
         return
     
+    # Helper to check if URL is proxy
     def is_proxy_url(url: str) -> bool:
         return 't.me/proxy' in url or 'tg://proxy' in url
     
+    # Helper to check if URL is V2Ray
     def is_v2ray_url(url: str) -> bool:
         return any(url.startswith(p) for p in [
             'vmess://', 'vless://', 'trojan://', 'hysteria2://', 'hysteria://',
             'tuic://', 'ss://', 'ssr://', 'shadowrocket://'
         ])
     
+    # 2. Extract links from entities (Hyperlinks)
     proxy_links = []
     v2ray_links = []
     
@@ -226,12 +230,14 @@ async def handle_channel_post(message: Message):
             elif is_v2ray_url(url):
                 v2ray_links.append(url)
         elif entity.type == 'url':
+            # Extract URL from text using offset and length
             url = text[entity.offset:entity.offset + entity.length]
             if is_proxy_url(url):
                 proxy_links.append(url)
             elif is_v2ray_url(url):
                 v2ray_links.append(url)
     
+    # 3. If entities didn't yield results, try Regex on raw text
     if not proxy_links:
         proxy_links = re.findall(r'(?:https?://t\.me/proxy|tg://proxy)\S+', text)
     
@@ -241,6 +247,7 @@ async def handle_channel_post(message: Message):
             text
         )
     
+    # 4. Save proxy links
     if proxy_links:
         for link in proxy_links:
             save_to_db({
@@ -253,6 +260,7 @@ async def handle_channel_post(message: Message):
             })
         return
     
+    # 5. Save V2Ray links
     if v2ray_links:
         for link in v2ray_links:
             save_to_db({
@@ -264,6 +272,8 @@ async def handle_channel_post(message: Message):
                 "file_name": ""
             })
         return
+    
+    # 6. Nothing matched - ignore
 
 # ============ KEYBOARDS ============
 def get_main_menu():
@@ -323,8 +333,10 @@ async def get_proxy(message: Message):
     if not items:
         await message.answer("❌ پروکسی یافت نشد.", reply_markup=get_main_menu())
         return
+    
     count = min(3, len(items))
     selected = random.sample(items, count)
+    
     await message.answer(f"🔵 **{count} پروکسی رندوم:**", parse_mode=ParseMode.MARKDOWN)
     for item in selected:
         await send_proxy(message, item)
@@ -339,55 +351,52 @@ async def get_nepster(message: Message):
     item = random.choice(items)
     await send_nepster(message, item)
 
-# ============ MANAGE PANEL (Paginated) ============
+# ============ MANAGE PANEL (PAGINATED) ============
 PAGE_SIZE = 10
 
 def build_page_keyboard(manage_type: str, current_page: int, total_pages: int):
+    """دکمه‌های صفحه‌بندی"""
     builder = InlineKeyboardBuilder()
     row = []
     if current_page > 0:
-        row.append(InlineKeyboardButton(text="⬅️", callback_data=f"manage_page_{manage_type}_{current_page - 1}"))
+        row.append(InlineKeyboardButton(text="⬅️", callback_data=f"page_{manage_type}_{current_page - 1}"))
     row.append(InlineKeyboardButton(text=f"{current_page + 1}/{total_pages}", callback_data="noop"))
     if current_page < total_pages - 1:
-        row.append(InlineKeyboardButton(text="➡️", callback_data=f"manage_page_{manage_type}_{current_page + 1}"))
+        row.append(InlineKeyboardButton(text="➡️", callback_data=f"page_{manage_type}_{current_page + 1}"))
     if row:
         builder.row(*row)
     builder.row(InlineKeyboardButton(text="❌ خروج", callback_data="manage_exit"))
     return builder.as_markup()
 
-async def show_paginated_list(message_or_callback, state: FSMContext, manage_type: str, page: int):
+async def show_page(callback: types.CallbackQuery, state: FSMContext, manage_type: str, page: int):
+    """نمایش یک صفحه از لیست"""
     items = get_from_db(manage_type)
     total = len(items)
     total_pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)
     page = max(0, min(page, total_pages - 1))
     
-    start_idx = page * PAGE_SIZE
-    end_idx = min(start_idx + PAGE_SIZE, total)
-    page_items = items[start_idx:end_idx]
+    start = page * PAGE_SIZE
+    end = min(start + PAGE_SIZE, total)
+    page_items = items[start:end]
     
     type_names = {"v2ray": "🟢 V2Ray", "proxy": "🔵 پروکسی", "nepster": "🟣 نپستر"}
     title = type_names.get(manage_type, "آیتم‌ها")
     
     text = f"{title} (صفحه {page + 1} از {total_pages}):\n\n"
-    for i, item in enumerate(page_items, start_idx + 1):
+    for i, item in enumerate(page_items, start + 1):
         if manage_type == "nepster":
             text += f"{i}️⃣ {item.get('file_name', 'Unknown')}\n"
         else:
-            short = item['text'][:70].replace('\n', ' ')
-            text += f"{i}️⃣ {short}...\n"
+            text += f"{i}️⃣ {item['text'][:70].replace(chr(10), ' ')}...\n"
         text += f"   📅 {to_jalali(item['date'])}\n\n"
     text += "شماره (۳) | چندتایی (۱,۴,۷) | بازه (۱-۹) | all"
     
     await state.update_data(manage_type=manage_type, manage_items=items, manage_page=page)
     await state.set_state(ManageState.waiting_for_delete)
     
-    if isinstance(message_or_callback, types.CallbackQuery):
-        await message_or_callback.message.edit_text(text, parse_mode=ParseMode.MARKDOWN,
-                                                     reply_markup=build_page_keyboard(manage_type, page, total_pages))
-        await message_or_callback.answer()
-    else:
-        await message_or_callback.answer(text, parse_mode=ParseMode.MARKDOWN,
-                                         reply_markup=build_page_keyboard(manage_type, page, total_pages))
+    await callback.message.edit_text(text, parse_mode=ParseMode.MARKDOWN,
+                                     reply_markup=build_page_keyboard(manage_type, page, total_pages))
+    await callback.answer()
 
 @dp.message(Command("manage"))
 async def cmd_manage(message: Message, state: FSMContext):
@@ -413,23 +422,22 @@ async def manage_exit(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.delete()
 
 @dp.callback_query(F.data.in_(["manage_v2ray", "manage_proxy", "manage_nepster"]))
-async def manage_initial_show(callback: types.CallbackQuery, state: FSMContext):
+async def manage_show_list(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.id != ADMIN_ID:
         await callback.answer("دسترسی غیرمجاز", show_alert=True)
         return
     type_map = {"manage_v2ray": "v2ray", "manage_proxy": "proxy", "manage_nepster": "nepster"}
-    manage_type = type_map[callback.data]
-    await show_paginated_list(callback, state, manage_type, 0)
+    await show_page(callback, state, type_map[callback.data], 0)
 
-@dp.callback_query(F.data.startswith("manage_page_"))
-async def manage_page_navigation(callback: types.CallbackQuery, state: FSMContext):
+@dp.callback_query(F.data.startswith("page_"))
+async def manage_page_change(callback: types.CallbackQuery, state: FSMContext):
     if callback.from_user.id != ADMIN_ID:
         await callback.answer("دسترسی غیرمجاز", show_alert=True)
         return
     parts = callback.data.split("_")
-    manage_type = parts[2]
-    page = int(parts[3])
-    await show_paginated_list(callback, state, manage_type, page)
+    manage_type = parts[1]
+    page = int(parts[2])
+    await show_page(callback, state, manage_type, page)
 
 @dp.callback_query(F.data == "noop")
 async def noop(callback: types.CallbackQuery):
@@ -488,20 +496,19 @@ async def manage_delete(message: Message, state: FSMContext):
     
     await state.update_data(manage_items=items, manage_page=new_page)
     
-    start_idx = new_page * PAGE_SIZE
-    end_idx = min(start_idx + PAGE_SIZE, total)
-    page_items = items[start_idx:end_idx]
+    start = new_page * PAGE_SIZE
+    end = min(start + PAGE_SIZE, total)
+    page_items = items[start:end]
     
     type_names = {"v2ray": "🟢 V2Ray", "proxy": "🔵 پروکسی", "nepster": "🟣 نپستر"}
     title = type_names.get(manage_type, "آیتم‌ها")
     
     txt = f"{title} (صفحه {new_page + 1} از {total_pages}):\n\n"
-    for i, item in enumerate(page_items, start_idx + 1):
+    for i, item in enumerate(page_items, start + 1):
         if manage_type == "nepster":
             txt += f"{i}️⃣ {item.get('file_name', 'Unknown')}\n"
         else:
-            short = item['text'][:70].replace('\n', ' ')
-            txt += f"{i}️⃣ {short}...\n"
+            txt += f"{i}️⃣ {item['text'][:70].replace(chr(10), ' ')}...\n"
         txt += f"   📅 {to_jalali(item['date'])}\n\n"
     txt += "شماره (۳) | چندتایی (۱,۴,۷) | بازه (۱-۹) | all"
     
@@ -562,4 +569,6 @@ async def send_proxy(message: Message, item: Dict):
             urls = re.findall(r'https?://t\.me/proxy\S+', line)
             if urls:
                 link = urls[0]
-            br
+            break
+    if link:
+        await 
