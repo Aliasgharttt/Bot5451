@@ -87,7 +87,6 @@ def init_database():
                 file_name TEXT
             )
         """)
-        # NEW: users table
         db_query("""
             CREATE TABLE IF NOT EXISTS users (
                 user_id INTEGER PRIMARY KEY,
@@ -550,4 +549,4 @@ async def support_receive_message(message: Message, state: FSMContext):
         "📝 " + message.text
     )
     try:
-     
+        await bot.send_message(A
