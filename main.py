@@ -379,13 +379,7 @@ async def show_chunk(message: Message, state: FSMContext, edit: bool = False):
     manage_type = data.get("manage_type", "")
     offset = data.get("manage_offset", 0)
     total = len(items)
-    
-    # 🔥 پروکسی لینک‌های بلندی دارد، برای جلوگیری از خطای محدودیت کاراکتر ۵ تایی نمایش داده می‌شود
-    if manage_type == "proxy":
-        chunk_size = 5
-    else:
-        chunk_size = 10
-    
+    chunk_size = 10
     start = offset
     end = min(offset + chunk_size, total)
     chunk_items = items[start:end]
@@ -395,6 +389,9 @@ async def show_chunk(message: Message, state: FSMContext, edit: bool = False):
     for i, item in enumerate(chunk_items, start + 1):
         if manage_type == "nepster":
             txt = txt + str(i) + "️⃣ " + str(item.get('file_name', 'Unknown')) + "\n"
+        elif manage_type == "proxy":
+            # فقط شماره و تاریخ/ساعت، بدون لینک
+            txt = txt + str(i) + "️⃣ " + "پروکسی MTProto" + "\n"
         else:
             short = str(item['text'][:70]).replace('\n', ' ')
             txt = txt + str(i) + "️⃣ " + short + "...\n"
@@ -561,3 +558,5 @@ async def main():
     Thread(target=run_health_server, daemon=True).start()
     logger.info("✅ Bot ready!")
     await dp.start_polling(bot, allowed_updates=["message", "channel_post", "callback_query"])
+
+if __name__ == "__main__"
