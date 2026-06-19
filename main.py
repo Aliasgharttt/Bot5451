@@ -365,7 +365,9 @@ async def manage_show_list(callback: types.CallbackQuery, state: FSMContext):
         return
     type_map = {"manage_v2ray": ("v2ray", "🟢 V2Ray"), "manage_proxy": ("proxy", "🔵 پروکسی"), "manage_nepster": ("nepster", "🟣 نپستر")}
     filter_type, title = type_map[callback.data]
+    logger.info("MANAGE SHOW LIST: type=" + filter_type)
     items = get_from_db(filter_type)
+    logger.info("MANAGE SHOW LIST: count=" + str(len(items)))
     if not items:
         await callback.answer(title + " خالیه", show_alert=True)
         return
