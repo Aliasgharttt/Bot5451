@@ -202,11 +202,52 @@ async def handle_channel_post(message: Message):
             return
     
     text = message.text or message.caption or ""
-    if not text:
+    entities = message.entities or message.caption_entities or []
+    
+    if not text and not entities:
         return
     
-    # 2. PROXY - extract only t.me/proxy or tg://proxy links
-    proxy_links = re.findall(r'(?:https?://t\.me/proxy|tg://proxy)\S+', text)
+    # Helper to check if URL is proxy
+    def is_proxy_url(url: str) -> bool:
+        return 't.me/proxy' in url or 'tg://proxy' in url
+    
+    # Helper to check if URL is V2Ray
+    def is_v2ray_url(url: str) -> bool:
+        return any(url.startswith(p) for p in [
+            'vmess://', 'vless://', 'trojan://', 'hysteria2://', 'hysteria://',
+            'tuic://', 'ss://', 'ssr://', 'shadowrocket://'
+        ])
+    
+    # 2. Extract links from entities (Hyperlinks)
+    proxy_links = []
+    v2ray_links = []
+    
+    for entity in entities:
+        if entity.type == 'text_link':
+            url = entity.url
+            if is_proxy_url(url):
+                proxy_links.append(url)
+            elif is_v2ray_url(url):
+                v2ray_links.append(url)
+        elif entity.type == 'url':
+            # Extract URL from text using offset and length
+            url = text[entity.offset:entity.offset + entity.length]
+            if is_proxy_url(url):
+                proxy_links.append(url)
+            elif is_v2ray_url(url):
+                v2ray_links.append(url)
+    
+    # 3. If entities didn't yield results, try Regex on raw text
+    if not proxy_links:
+        proxy_links = re.findall(r'(?:https?://t\.me/proxy|tg://proxy)\S+', text)
+    
+    if not v2ray_links:
+        v2ray_links = re.findall(
+            r'(?:vmess|vless|trojan|hysteria2?|tuic|ss|ssr|shadowrocket)://\S+',
+            text
+        )
+    
+    # 4. Save proxy links
     if proxy_links:
         for link in proxy_links:
             save_to_db({
@@ -219,11 +260,7 @@ async def handle_channel_post(message: Message):
             })
         return
     
-    # 3. V2RAY - extract only protocol links
-    v2ray_links = re.findall(
-        r'(?:vmess|vless|trojan|hysteria2?|tuic|ss|ssr|shadowrocket)://\S+',
-        text
-    )
+    # 5. Save V2Ray links
     if v2ray_links:
         for link in v2ray_links:
             save_to_db({
@@ -236,7 +273,7 @@ async def handle_channel_post(message: Message):
             })
         return
     
-    # 4. Nothing matched - ignore
+    # 6. Nothing matched - ignore
 
 # ============ KEYBOARDS ============
 def get_main_menu():
