@@ -393,7 +393,13 @@ def get_manage_kb():
 async def cmd_manage(message: Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID: return
     await state.clear()
-    t = f"🛠 **پنل مدیریت**\n\n🟢 V2Ray: {len(get_from_db('v2ray'))}\n🔵 پروکسی: {len(get_from_db('proxy'))}\n🟣 نپستر: {len(get_from_db('nepster'))}\n📊 کل: {len(get_from_db('all'))}"
+    
+    v2ray_count = len(get_from_db("v2ray"))
+    proxy_count = len(get_from_db("proxy"))
+    nepster_count = len(get_from_db("nepster"))
+    total = v2ray_count + proxy_count + nepster_count
+    
+    t = f"🛠 **پنل مدیریت**\n\n🟢 V2Ray: {v2ray_count}\n🔵 پروکسی: {proxy_count}\n🟣 نپستر: {nepster_count}\n📊 کل: {total}"
     await message.answer(t, parse_mode=ParseMode.MARKDOWN, reply_markup=get_manage_kb())
 
 @dp.callback_query(F.data == "manage_back")
