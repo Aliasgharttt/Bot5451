@@ -48,7 +48,8 @@ dp = Dispatcher(storage=storage)
 # ============ FSM ============
 class SupportState(StatesGroup):
     waiting_for_message = State()
-    # ============ DATABASE ============
+
+# ============ DATABASE ============
 def db_query(sql: str, params: List = None):
     try:
         url = f"{DB_URL}"
@@ -98,7 +99,8 @@ def init_database():
         logger.info("✅ Database initialized")
     except Exception as e:
         logger.error(f"❌ Database init error: {e}")
-        def save_to_db(item: Dict):
+
+def save_to_db(item: Dict):
     try:
         db_query("""
             INSERT INTO configs (message_id, text, date, type, file_id, file_name)
@@ -189,7 +191,8 @@ def delete_from_db(db_id: int = None, filter_type: str = None):
             db_query("DELETE FROM configs WHERE type = ?", [filter_type])
     except Exception as e:
         logger.error(f"❌ DB delete error: {e}")
-        # ============ JALALI HELPER ============
+
+# ============ JALALI HELPER ============
 def to_jalali(dt):
     if isinstance(dt, str):
         try:
@@ -219,7 +222,8 @@ def detect_type(text: str) -> str:
 
 def is_npvt_file(file_name: str = None) -> bool:
     return file_name and file_name.lower().endswith('.npvt')
-    # ============ CHANNEL POST HANDLER ============
+
+# ============ CHANNEL POST HANDLER ============
 @dp.channel_post()
 async def handle_channel_post(message: Message):
     if message.chat.id != CHANNEL_ID:
@@ -302,7 +306,8 @@ async def handle_channel_post(message: Message):
                 "file_name": ""
             })
         return
-        # ============ KEYBOARDS ============
+
+# ============ KEYBOARDS ============
 def get_main_menu():
     builder = ReplyKeyboardBuilder()
     builder.row(
@@ -322,9 +327,7 @@ def get_main_menu():
 async def cmd_start(message: Message):
     user = message.from_user
     user_link = "[" + user.full_name + "](tg://user?id=" + str(user.id) + ")"
-    
     save_user_to_db(user.id, user.full_name, user.username or "")
-    
     await message.answer(
         "سلام " + user_link + " 👋 خوش آمدید!",
         parse_mode=ParseMode.MARKDOWN,
@@ -376,7 +379,8 @@ async def cmd_manage(message: Message, state: FSMContext):
     await state.clear()
     t = f"🛠 **پنل مدیریت**\n\n🟢 V2Ray: {len(get_from_db('v2ray'))}\n🔵 پروکسی: {len(get_from_db('proxy'))}\n🟣 نپستر: {len(get_from_db('nepster'))}\n📊 کل: {len(get_from_db('all'))}"
     await message.answer(t, parse_mode=ParseMode.MARKDOWN, reply_markup=get_manage_kb())
-    @dp.callback_query(F.data == "manage_back")
+
+@dp.callback_query(F.data == "manage_back")
 async def manage_back(c: types.CallbackQuery):
     t = f"🛠 **پنل مدیریت**\n\n🟢 V2Ray: {len(get_from_db('v2ray'))}\n🔵 پروکسی: {len(get_from_db('proxy'))}\n🟣 نپستر: {len(get_from_db('nepster'))}\n📊 کل: {len(get_from_db('all'))}"
     await c.message.edit_text(t, parse_mode=ParseMode.MARKDOWN, reply_markup=get_manage_kb())
@@ -387,7 +391,8 @@ async def stats_users(c: types.CallbackQuery):
     kb.row(InlineKeyboardButton(text="📋 مشاهده جزئیات", callback_data="stats_details"))
     kb.row(InlineKeyboardButton(text="بازگشت 🔙", callback_data="manage_back"))
     await c.message.edit_text(f"👥 **آمار کاربران**\n\nتعداد کل کاربران ربات: {get_users_count()} نفر", parse_mode=ParseMode.MARKDOWN, reply_markup=kb.as_markup())
-    @dp.callback_query(F.data == "stats_details")
+
+@dp.callback_query(F.data == "stats_details")
 async def stats_details(c: types.CallbackQuery):
     users = get_all_users()
     if not users: return await c.answer("کاربری یافت نشد.", show_alert=True)
@@ -408,7 +413,8 @@ async def stats_details(c: types.CallbackQuery):
             kb = InlineKeyboardBuilder().row(InlineKeyboardButton(text="بازگشت 🔙", callback_data="stats_users")).as_markup()
             await c.message.edit_text(msg, parse_mode=ParseMode.MARKDOWN, reply_markup=kb)
         else: await c.message.answer(msg, parse_mode=ParseMode.MARKDOWN)
-            @dp.callback_query(F.data == "manage_exit")
+
+@dp.callback_query(F.data == "manage_exit")
 async def manage_exit(c: types.CallbackQuery):
     await c.message.delete()
 
@@ -418,7 +424,8 @@ async def del_callback(c: types.CallbackQuery):
     ftype = c.data.replace("del_", "")
     delete_from_db(filter_type=ftype)
     await c.message.edit_text(f"✅ بخش {ftype} پاکسازی شد!", reply_markup=InlineKeyboardBuilder().row(InlineKeyboardButton(text="بازگشت 🔙", callback_data="manage_back")).as_markup())
-    # ============ SUPPORT ============
+
+# ============ SUPPORT ============
 @dp.message(F.text == "Support")
 async def support_start(message: Message, state: FSMContext):
     await message.answer("📨 **پشتیبانی**\n\nپیام خود را بنویسید.\n🚫 لغو: /cancel", parse_mode=ParseMode.MARKDOWN, reply_markup=types.ReplyKeyboardRemove())
@@ -436,7 +443,8 @@ async def support_recv(message: Message, state: FSMContext):
         await message.answer("✅ ارسال شد.", reply_markup=get_main_menu())
     except Exception: await message.answer("❌ خطا در ارسال.")
     await state.clear()
-    # ============ SEND FUNCTIONS ============
+
+# ============ SEND FUNCTIONS ============
 async def send_v2ray(message: Message, item: Dict):
     lines = [line.strip() for line in item["text"].split('\n') if line.strip()]
     config_text = '\n'.join(lines)
@@ -491,8 +499,9 @@ async def send_nepster(message: Message, item: Dict):
         await message.answer(
             "🟣 <b>نپستر</b>\n\n❌ فایل در دسترس نیست.",
             parse_mode=ParseMode.HTML
-                )
-        # ============ MAIN (WEBHOOK) ============
+        )
+
+# ============ MAIN (WEBHOOK) ============
 async def main():
     logger.info("🚀 Starting bot...")
     init_database()
