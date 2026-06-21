@@ -84,6 +84,7 @@ def init_database():
                 text TEXT,
                 date TEXT,
                 type TEXT,
+                operator TEXT,
                 file_id TEXT,
                 file_name TEXT
             )
@@ -103,16 +104,17 @@ def init_database():
 def save_to_db(item: Dict):
     try:
         db_query("""
-            INSERT INTO configs (message_id, text, date, type, file_id, file_name)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO configs (message_id, text, date, type, operator, file_id, file_name)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         """, [
             item["id"], item["text"],
             item["date"].strftime('%Y-%m-%d %H:%M:%S'),
             item["type"],
+            item.get("operator", ""),
             item.get("file_id", ""),
             item.get("file_name", "")
         ])
-        logger.info(f"💾 Saved: {item['type']}")
+        logger.info(f"💾 Saved: {item['type']} [{item.get('operator', '')}]")
     except Exception as e:
         logger.error(f"❌ DB save error: {e}")
 
@@ -155,9 +157,12 @@ def get_all_users() -> List[Dict]:
         logger.error(f"❌ User fetch error: {e}")
         return []
 
-def get_from_db(filter_type: str = "all") -> List[Dict]:
+def get_from_db(filter_type: str = "all", operator: str = None) -> List[Dict]:
     try:
-        if filter_type == "all":
+        if operator:
+            sql = "SELECT * FROM configs WHERE type = ? AND operator = ? ORDER BY id"
+            params = [filter_type, operator]
+        elif filter_type == "all":
             sql = "SELECT * FROM configs ORDER BY id"
             params = []
         else:
@@ -173,8 +178,9 @@ def get_from_db(filter_type: str = "all") -> List[Dict]:
                     "text": row[2],
                     "date": datetime.strptime(row[3], '%Y-%m-%d %H:%M:%S'),
                     "type": row[4],
-                    "file_id": row[5] if row[5] else None,
-                    "file_name": row[6] if row[6] else None
+                    "operator": row[5] or "",
+                    "file_id": row[6] if row[6] else None,
+                    "file_name": row[7] if row[7] else None
                 })
         return items
     except Exception as e:
@@ -208,6 +214,21 @@ def random_name(length=6):
     chars = string.ascii_letters + string.digits
     return ''.join(random.choices(chars, k=length)) + ".npvt"
 
+# ============ OPERATOR HELPERS ============
+VALID_OPERATORS = {"#همراه_اول": "mci", "#ایرانسل": "mtn", "#رایتل": "rtl"}
+
+OPERATOR_LABELS = {
+    "mci": "🚀 همراه اول",
+    "mtn": "⚡ ایرانسل",
+    "rtl": "🌐 رایتل"
+}
+
+OPERATOR_PHRASES = {
+    "mci": ["🚀 همراه اول VIP", "📡 همراه اول - پرسرعت", "🔥 MCI - ویژه"],
+    "mtn": ["⚡ ایرانسل - پایدار", "🌐 MTN - مناسب", "💎 ایرانسل VIP"],
+    "rtl": ["📶 رایتل - جدید", "🔷 RTL - مخصوص", "🎯 رایتل VIP"]
+}
+
 # ============ HEALTH CHECK ============
 async def health_check(request):
     return web.Response(text="OK")
@@ -223,11 +244,27 @@ def detect_type(text: str) -> str:
 def is_npvt_file(file_name: str = None) -> bool:
     return file_name and file_name.lower().endswith('.npvt')
 
+# ============ CURRENT OPERATOR TRACKER ============
+current_operator = {"value": ""}
+
 # ============ CHANNEL POST HANDLER ============
 @dp.channel_post()
 async def handle_channel_post(message: Message):
     if message.chat.id != CHANNEL_ID:
         return
+    
+    if message.text:
+        text = message.text.strip()
+        for tag, op_code in VALID_OPERATORS.items():
+            if text == tag:
+                current_operator["value"] = op_code
+                logger.info(f"🏷 Operator set to: {op_code}")
+                return
+    
+    if not current_operator["value"]:
+        return
+    
+    op = current_operator["value"]
     
     if message.document:
         file_name = message.document.file_name or ""
@@ -237,6 +274,7 @@ async def handle_channel_post(message: Message):
                 "text": message.caption or "🟣 نپستر کانفیگ",
                 "date": message.date,
                 "type": "nepster",
+                "operator": op,
                 "file_id": message.document.file_id,
                 "file_name": random_name()
             })
@@ -290,6 +328,7 @@ async def handle_channel_post(message: Message):
                 "text": link,
                 "date": message.date,
                 "type": "proxy",
+                "operator": op,
                 "file_id": None,
                 "file_name": ""
             })
@@ -302,6 +341,7 @@ async def handle_channel_post(message: Message):
                 "text": link,
                 "date": message.date,
                 "type": "v2ray",
+                "operator": op,
                 "file_id": None,
                 "file_name": ""
             })
@@ -322,6 +362,20 @@ def get_main_menu():
     )
     return builder.as_markup(resize_keyboard=True)
 
+def get_operator_kb():
+    kb = InlineKeyboardBuilder()
+    kb.row(
+        InlineKeyboardButton(text="🚀 همراه اول", callback_data="op_mci"),
+        InlineKeyboardButton(text="⚡ ایرانسل", callback_data="op_mtn")
+    )
+    kb.row(
+        InlineKeyboardButton(text="🌐 رایتل", callback_data="op_rtl")
+    )
+    kb.row(
+        InlineKeyboardButton(text="🔙 بازگشت", callback_data="op_back")
+    )
+    return kb.as_markup()
+
 # ============ HANDLERS ============
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
@@ -336,49 +390,122 @@ async def cmd_start(message: Message):
 
 @dp.message(F.text == "V2Ray")
 async def get_v2ray(message: Message):
-    items = get_from_db("v2ray")
-    if not items:
-        await message.answer("❌ V2Ray یافت نشد.", reply_markup=get_main_menu())
-        return
-    item = random.choice(items)
-    await send_v2ray(message, item)
+    await message.answer("🔵 **انتخاب اپراتور:**", parse_mode=ParseMode.MARKDOWN, reply_markup=get_operator_kb())
 
 @dp.message(F.text == "Proxy")
 async def get_proxy(message: Message):
-    items = get_from_db("proxy")
-    if not items:
-        await message.answer("❌ پروکسی یافت نشد.", reply_markup=get_main_menu())
-        return
-    count = min(3, len(items))
-    selected = random.sample(items, count)
-    await message.answer("🔵 **" + str(count) + " پروکسی رندوم:**", parse_mode=ParseMode.MARKDOWN)
-    for item in selected:
-        await send_proxy(message, item)
-    await message.answer("✅", reply_markup=get_main_menu())
+    await message.answer("🔵 **انتخاب اپراتور:**", parse_mode=ParseMode.MARKDOWN, reply_markup=get_operator_kb())
 
 @dp.message(F.text == "NPT (NapsternetV)")
-async def get_nepster(message: Message):
-    items = get_from_db("nepster")
+async def get_nepster_menu(message: Message):
+    await message.answer("🔵 **انتخاب اپراتور:**", parse_mode=ParseMode.MARKDOWN, reply_markup=get_operator_kb())
+
+@dp.callback_query(F.data == "op_back")
+async def op_back(c: types.CallbackQuery):
+    await c.message.delete()
+    await c.answer()
+
+@dp.callback_query(F.data.startswith("op_"))
+async def operator_selected(c: types.CallbackQuery):
+    op_code = c.data.replace("op_", "")
+    op_label = OPERATOR_LABELS.get(op_code, "")
+    await c.message.delete()
+    
+    kb = InlineKeyboardBuilder()
+    kb.row(
+        InlineKeyboardButton(text="🟢 V2Ray", callback_data=f"type_v2ray_{op_code}"),
+        InlineKeyboardButton(text="🔵 Proxy", callback_data=f"type_proxy_{op_code}")
+    )
+    kb.row(
+        InlineKeyboardButton(text="🟣 NPT", callback_data=f"type_nepster_{op_code}")
+    )
+    
+    await c.message.answer(
+        f"📱 **{op_label}**\n\nحالا نوع کانفیگ رو انتخاب کن:",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=kb.as_markup()
+    )
+    await c.answer()
+    @dp.callback_query(F.data.startswith("type_"))
+async def type_selected(c: types.CallbackQuery):
+    parts = c.data.split("_")
+    config_type = parts[1]
+    op_code = parts[2]
+    
+    op_label = OPERATOR_LABELS.get(op_code, "")
+    phrase = random.choice(OPERATOR_PHRASES.get(op_code, [op_label]))
+    
+    items = get_from_db(config_type, operator=op_code)
+    
     if not items:
-        await message.answer("❌ نپستر یافت نشد.", reply_markup=get_main_menu())
+        await c.message.delete()
+        await c.message.answer("موجود نیست شماهم نگردید نیست😅😄")
+        await c.answer()
         return
     
-    # Send waiting emoji
-    wait_msg = await message.answer("⌛")
+    item = random.choice(items)
     
-    try:
-        item = random.choice(items)
-        await send_nepster(message, item)
-    except Exception as e:
-        logger.error(f"❌ Nepster error: {e}")
-        await message.answer("❌ خطا در ارسال فایل.", reply_markup=get_main_menu())
-    finally:
-        # Delete waiting emoji
+    await c.message.delete()
+    
+    if config_type == "v2ray":
+        lines = [line.strip() for line in item["text"].split('\n') if line.strip()]
+        config_text = '\n'.join(lines)
+        escaped = html.escape(config_text)
+        await c.message.answer(
+            "🟢 <b>V2Ray - " + phrase + "</b>\n<pre>" + escaped[:1000] + "</pre>",
+            parse_mode=ParseMode.HTML,
+            disable_web_page_preview=True
+        )
+    elif config_type == "proxy":
+        text = item["text"]
+        link = None
+        for line in text.split('\n'):
+            if 't.me/proxy' in line:
+                urls = re.findall(r'https?://t\.me/proxy\S+', line)
+                if urls:
+                    link = urls[0]
+                break
+        if link:
+            await c.message.answer(
+                "🔵 <b>MTProto - " + phrase + "</b>\n\n<a href='" + html.escape(link) + "'>⚡ کلیک کنید</a>",
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True
+            )
+        else:
+            await c.message.answer(
+                "🔵 <b>پروکسی - " + phrase + "</b>\n\n" + html.escape(text[:400]),
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True
+            )
+    elif config_type == "nepster":
+        wait_msg = await c.message.answer("⌛")
         try:
-            await wait_msg.delete()
-        except:
-            pass
-    # ============ MANAGE PANEL ============
+            if item.get("file_id"):
+                new_name = item.get('file_name', 'config.npvt')
+                file_data = await bot.download(item["file_id"])
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".npvt") as tmp:
+                    tmp.write(file_data.read())
+                    tmp_path = tmp.name
+                await bot.send_document(
+                    chat_id=c.message.chat.id,
+                    document=FSInputFile(tmp_path, filename=new_name),
+                    caption="🟣 <b>نپستر - " + phrase + "</b>\n📄 " + html.escape(new_name),
+                    parse_mode=ParseMode.HTML
+                )
+                os.remove(tmp_path)
+            else:
+                await c.message.answer("🟣 <b>نپستر</b>\n\n❌ فایل در دسترس نیست.", parse_mode=ParseMode.HTML)
+        except Exception as e:
+            logger.error(f"❌ Nepster send error: {e}")
+            await c.message.answer("🟣 <b>نپستر</b>\n\n❌ خطا در ارسال فایل.", parse_mode=ParseMode.HTML)
+        finally:
+            try:
+                await wait_msg.delete()
+            except:
+                pass
+    await c.answer()
+
+# ============ MANAGE PANEL ============
 def get_manage_kb():
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="👥 آمار کاربران", callback_data="stats_users"))
@@ -457,63 +584,6 @@ async def support_recv(message: Message, state: FSMContext):
         await message.answer("✅ ارسال شد.", reply_markup=get_main_menu())
     except Exception: await message.answer("❌ خطا در ارسال.")
     await state.clear()
-
-# ============ SEND FUNCTIONS ============
-async def send_v2ray(message: Message, item: Dict):
-    lines = [line.strip() for line in item["text"].split('\n') if line.strip()]
-    config_text = '\n'.join(lines)
-    escaped = html.escape(config_text)
-    await message.answer(
-        "🟢 <b>V2Ray</b>\n<pre>" + escaped[:1000] + "</pre>",
-        parse_mode=ParseMode.HTML,
-        disable_web_page_preview=True
-    )
-
-async def send_proxy(message: Message, item: Dict):
-    text = item["text"]
-    link = None
-    for line in text.split('\n'):
-        if 't.me/proxy' in line:
-            urls = re.findall(r'https?://t\.me/proxy\S+', line)
-            if urls:
-                link = urls[0]
-            break
-    if link:
-        await message.answer(
-            "🔵 <b>MTProto</b>\n\n<a href='" + html.escape(link) + "'>⚡ کلیک کنید</a>",
-            parse_mode=ParseMode.HTML,
-            disable_web_page_preview=True
-        )
-    else:
-        await message.answer(
-            "🔵 <b>پروکسی</b>\n\n" + html.escape(text[:400]),
-            parse_mode=ParseMode.HTML,
-            disable_web_page_preview=True
-        )
-
-async def send_nepster(message: Message, item: Dict):
-    if item.get("file_id"):
-        new_name = item.get('file_name', 'config.npvt')
-        try:
-            file_data = await bot.download(item["file_id"])
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".npvt") as tmp:
-                tmp.write(file_data.read())
-                tmp_path = tmp.name
-            await bot.send_document(
-                chat_id=message.chat.id,
-                document=FSInputFile(tmp_path, filename=new_name),
-                caption="🟣 <b>نپستر</b>\n📄 " + html.escape(new_name),
-                parse_mode=ParseMode.HTML
-            )
-            os.remove(tmp_path)
-        except Exception as e:
-            logger.error(f"❌ Nepster send error: {e}")
-            await message.answer("🟣 <b>نپستر</b>\n\n❌ خطا در ارسال فایل.", parse_mode=ParseMode.HTML)
-    else:
-        await message.answer(
-            "🟣 <b>نپستر</b>\n\n❌ فایل در دسترس نیست.",
-            parse_mode=ParseMode.HTML
-        )
 
 # ============ MAIN (WEBHOOK) ============
 async def main():
