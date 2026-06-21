@@ -355,12 +355,28 @@ async def get_proxy(message: Message):
     for item in selected:
         await send_proxy(message, item)
     await message.answer("✅", reply_markup=get_main_menu())
-
 @dp.message(F.text == "NPT (NapsternetV)")
 async def get_nepster(message: Message):
     items = get_from_db("nepster")
     if not items:
         await message.answer("❌ نپستر یافت نشد.", reply_markup=get_main_menu())
+        return
+    
+    # Send waiting emoji
+    wait_msg = await message.answer("⌛")
+    
+    try:
+        item = random.choice(items)
+        await send_nepster(message, item)
+    except Exception as e:
+        logger.error(f"❌ Nepster error: {e}")
+        await message.answer("❌ خطا در ارسال فایل.", reply_markup=get_main_menu())
+    finally:
+        # Delete waiting emoji
+        try:
+            await wait_msg.delete()
+        except:
+            pass
         return
     item = random.choice(items)
     await send_nepster(message, item)
